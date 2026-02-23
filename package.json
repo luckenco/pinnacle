@@ -1,0 +1,51 @@
+{
+  "name": "pinnacle",
+  "version": "0.1.0",
+  "description": "Personal Pi package with workflow commands, safety guards, skills, and prompts.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "coding-agent"
+  ],
+  "files": [
+    "extensions",
+    "skills",
+    "prompts",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "check": "biome check . && bun run typecheck",
+    "lint": "biome lint .",
+    "format": "biome format --write .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun test"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ],
+    "skills": [
+      "./skills"
+    ],
+    "prompts": [
+      "./prompts"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@sinclair/typebox": "*"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "latest",
+    "@mariozechner/pi-coding-agent": "^0.54.2",
+    "@types/node": "latest",
+    "typescript": "latest"
+  },
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "packageManager": "bun@1.3.9"
+}
