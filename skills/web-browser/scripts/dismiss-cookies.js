@@ -339,7 +339,7 @@ try {
             const frameResult = await cdp.evaluateInFrame(
               sessionId,
               frame.id,
-              `(${IFRAME_DISMISS_SCRIPT})(${!reject})`
+              `(${IFRAME_DISMISS_SCRIPT})(${!reject})`,
             );
             if (frameResult.length > 0) {
               result = frameResult;

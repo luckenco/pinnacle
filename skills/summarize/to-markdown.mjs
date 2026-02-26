@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 /**
  * Convert a URL or local file to Markdown using `uvx markitdown`.
  * Optionally summarize the produced Markdown via `pi` (claude-haiku-4-5).
@@ -18,20 +19,22 @@
  *   node to-markdown.mjs ./spec.pdf --summary --prompt "Extract API endpoints and auth details."
  */
 
-import { existsSync, mkdirSync, writeFileSync } from 'fs';
-import { basename, join } from 'path';
-import { tmpdir } from 'os';
-import { spawnSync } from 'child_process';
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 
 const argv = process.argv.slice(2);
 
 function usageAndExit(code = 1) {
-  console.error('Usage: node to-markdown.mjs <url-or-path> [--out <file>] [--tmp] [--summary [prompt]] [--prompt <prompt>]');
+  console.error(
+    "Usage: node to-markdown.mjs <url-or-path> [--out <file>] [--tmp] [--summary [prompt]] [--prompt <prompt>]",
+  );
   process.exit(code);
 }
 
 function isFlag(s) {
-  return typeof s === 'string' && s.startsWith('--');
+  return typeof s === "string" && s.startsWith("--");
 }
 
 function isUrl(s) {
@@ -43,20 +46,20 @@ function ensureDir(path) {
 }
 
 function safeName(s) {
-  return (s || 'document').replace(/[^a-z0-9._-]+/gi, '_');
+  return (s || "document").replace(/[^a-z0-9._-]+/gi, "_");
 }
 
 function getInputBasename(s) {
   if (isUrl(s)) {
     const u = new URL(s);
     const b = basename(u.pathname);
-    return safeName(b || 'document');
+    return safeName(b || "document");
   }
   return safeName(basename(s));
 }
 
 function makeTmpMdPath(input) {
-  const dir = join(tmpdir(), 'pi-summarize-out');
+  const dir = join(tmpdir(), "pi-summarize-out");
   ensureDir(dir);
   const base = getInputBasename(input);
   const stamp = Date.now().toString(36);
@@ -74,22 +77,22 @@ let summaryPrompt = null;
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
 
-  if (a === '--out') {
+  if (a === "--out") {
     outPath = argv[i + 1] ?? null;
     if (!outPath || isFlag(outPath)) {
-      console.error('Expected a value after --out');
+      console.error("Expected a value after --out");
       process.exit(1);
     }
     i++;
     continue;
   }
 
-  if (a === '--tmp') {
+  if (a === "--tmp") {
     writeTmp = true;
     continue;
   }
 
-  if (a === '--prompt' || a === '--summary-prompt') {
+  if (a === "--prompt" || a === "--summary-prompt") {
     summaryPrompt = argv[i + 1] ?? null;
     if (!summaryPrompt || isFlag(summaryPrompt)) {
       console.error(`Expected a value after ${a}`);
@@ -99,7 +102,7 @@ for (let i = 0; i < argv.length; i++) {
     continue;
   }
 
-  if (a === '--summary') {
+  if (a === "--summary") {
     doSummary = true;
 
     // Allow: --summary "extra instructions" (only if next token isn't a flag and input is already known)
@@ -132,17 +135,17 @@ for (let i = 0; i < argv.length; i++) {
 if (!input) usageAndExit(1);
 
 function runMarkitdown(arg) {
-  const result = spawnSync('uvx', ['markitdown', arg], {
-    encoding: 'utf-8',
-    maxBuffer: 50 * 1024 * 1024
+  const result = spawnSync("uvx", ["markitdown", arg], {
+    encoding: "utf-8",
+    maxBuffer: 50 * 1024 * 1024,
   });
 
   if (result.error) {
     throw new Error(`Failed to run uvx markitdown: ${result.error.message}`);
   }
   if (result.status !== 0) {
-    const stderr = (result.stderr || '').trim();
-    throw new Error(`markitdown failed for ${arg}${stderr ? `\n${stderr}` : ''}`);
+    const stderr = (result.stderr || "").trim();
+    throw new Error(`markitdown failed for ${arg}${stderr ? `\n${stderr}` : ""}`);
   }
   return result.stdout;
 }
@@ -159,8 +162,8 @@ function summarizeWithPi(markdown, { mdPathForNote = null, extraPrompt = null } 
     truncated = true;
   }
 
-  const note = mdPathForNote ? `\n\n(Generated markdown file: ${mdPathForNote})\n` : '';
-  const truncNote = truncated ? '\n\nNote: Input was truncated due to size.' : '';
+  const note = mdPathForNote ? `\n\n(Generated markdown file: ${mdPathForNote})\n` : "";
+  const truncNote = truncated ? "\n\nNote: Input was truncated due to size." : "";
 
   const contextBlock = extraPrompt
     ? `\n\nUser-provided context / instructions (follow these closely):\n${extraPrompt}\n`
@@ -180,27 +183,33 @@ ${truncNote}
 ${body}
 --- END DOCUMENT ---`;
 
-  const result = spawnSync('pi', [
-    '--provider', 'anthropic',
-    '--model', 'claude-haiku-4-5',
-    '--no-tools',
-    '--no-session',
-    '-p',
-    prompt
-  ], {
-    encoding: 'utf-8',
-    maxBuffer: 20 * 1024 * 1024,
-    timeout: 120_000
-  });
+  const result = spawnSync(
+    "pi",
+    [
+      "--provider",
+      "anthropic",
+      "--model",
+      "claude-haiku-4-5",
+      "--no-tools",
+      "--no-session",
+      "-p",
+      prompt,
+    ],
+    {
+      encoding: "utf-8",
+      maxBuffer: 20 * 1024 * 1024,
+      timeout: 120_000,
+    },
+  );
 
   if (result.error) {
     throw new Error(`Failed to run pi: ${result.error.message}`);
   }
   if (result.status !== 0) {
-    const stderr = (result.stderr || '').trim();
-    throw new Error(`pi failed${stderr ? `\n${stderr}` : ''}`);
+    const stderr = (result.stderr || "").trim();
+    throw new Error(`pi failed${stderr ? `\n${stderr}` : ""}`);
   }
-  return (result.stdout || '').trim();
+  return (result.stdout || "").trim();
 }
 
 async function main() {
@@ -212,7 +221,7 @@ async function main() {
 
   // If the user requested an explicit output file, write it there.
   if (outPath) {
-    writeFileSync(outPath, md, 'utf-8');
+    writeFileSync(outPath, md, "utf-8");
   }
 
   // When summarizing we *always* write a temp markdown file and always return its path as a hint.
@@ -220,7 +229,7 @@ async function main() {
   let tmpMdPath = null;
   if (writeTmp || doSummary) {
     tmpMdPath = makeTmpMdPath(input);
-    writeFileSync(tmpMdPath, md, 'utf-8');
+    writeFileSync(tmpMdPath, md, "utf-8");
   }
 
   if (writeTmp && tmpMdPath) {
@@ -232,7 +241,10 @@ async function main() {
   }
 
   if (doSummary) {
-    const summary = summarizeWithPi(md, { mdPathForNote: tmpMdPath ?? outPath, extraPrompt: summaryPrompt });
+    const summary = summarizeWithPi(md, {
+      mdPathForNote: tmpMdPath ?? outPath,
+      extraPrompt: summaryPrompt,
+    });
     process.stdout.write(summary);
     if (tmpMdPath) {
       process.stdout.write(`\n\n[Hint: Full document Markdown saved to: ${tmpMdPath}]\n`);
@@ -243,7 +255,7 @@ async function main() {
   process.stdout.write(md);
 }
 
-main().catch(err => {
+main().catch((err) => {
   console.error(err?.message || String(err));
   process.exit(1);
 });

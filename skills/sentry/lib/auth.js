@@ -1,6 +1,6 @@
-import { readFileSync, existsSync } from "fs";
-import { homedir } from "os";
-import { join } from "path";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 export const SENTRY_API_BASE = "https://sentry.io/api/0";
 
@@ -58,7 +58,7 @@ export function formatTimestamp(ts) {
   if (!ts) return "N/A";
   try {
     const date = new Date(ts);
-    if (isNaN(date.getTime())) return ts;
+    if (Number.isNaN(date.getTime())) return ts;
     return date.toLocaleString();
   } catch {
     return ts;

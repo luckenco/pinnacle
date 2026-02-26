@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
+import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { writeFileSync } from "node:fs";
 import { connect } from "./cdp.js";
 
 const DEBUG = process.env.DEBUG === "1";

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { SENTRY_API_BASE, getAuthToken, fetchJson, formatTimestamp } from "../lib/auth.js";
+import { fetchJson, formatTimestamp, getAuthToken, SENTRY_API_BASE } from "../lib/auth.js";
 
 const HELP = `Usage: fetch-event.js <event-id> [options]
 
@@ -113,7 +113,7 @@ function formatBreadcrumb(crumb) {
         typeof crumb.timestamp === "number"
           ? new Date(crumb.timestamp * 1000)
           : new Date(crumb.timestamp);
-      if (!isNaN(date.getTime())) {
+      if (!Number.isNaN(date.getTime())) {
         ts = date.toISOString().slice(11, 19);
       }
     } catch {}
@@ -173,19 +173,15 @@ function formatEvent(event, options) {
     const contextLines = [];
 
     if (ctx.runtime) {
-      contextLines.push(
-        `- **Runtime:** ${ctx.runtime.name || "?"} ${ctx.runtime.version || ""}`
-      );
+      contextLines.push(`- **Runtime:** ${ctx.runtime.name || "?"} ${ctx.runtime.version || ""}`);
     }
     if (ctx.browser) {
-      contextLines.push(
-        `- **Browser:** ${ctx.browser.name || "?"} ${ctx.browser.version || ""}`
-      );
+      contextLines.push(`- **Browser:** ${ctx.browser.name || "?"} ${ctx.browser.version || ""}`);
     }
     if (ctx.os) {
       contextLines.push(`- **OS:** ${ctx.os.name || "?"} ${ctx.os.version || ""}`);
     }
-    if (ctx.device && ctx.device.family) {
+    if (ctx.device?.family) {
       contextLines.push(`- **Device:** ${ctx.device.family}`);
     }
     if (ctx.trace) {
@@ -248,13 +244,13 @@ function formatEvent(event, options) {
     // Breadcrumbs
     for (const entry of event.entries) {
       if (entry.type === "breadcrumbs" && entry.data?.values) {
-        const crumbs = options.allBreadcrumbs
-          ? entry.data.values
-          : entry.data.values.slice(-30);
+        const crumbs = options.allBreadcrumbs ? entry.data.values : entry.data.values.slice(-30);
 
         if (crumbs.length > 0) {
           lines.push("");
-          lines.push(`## Breadcrumbs (${crumbs.length}${options.allBreadcrumbs ? "" : " most recent"})`);
+          lines.push(
+            `## Breadcrumbs (${crumbs.length}${options.allBreadcrumbs ? "" : " most recent"})`,
+          );
           for (const c of crumbs) {
             lines.push(formatBreadcrumb(c));
           }

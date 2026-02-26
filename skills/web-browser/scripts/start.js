@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn, execSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,9 +9,7 @@ const useProfile = process.argv[2] === "--profile";
 if (process.argv[2] && process.argv[2] !== "--profile") {
   console.log("Usage: start.ts [--profile]");
   console.log("\nOptions:");
-  console.log(
-    "  --profile  Copy your default Chrome profile (cookies, logins)",
-  );
+  console.log("  --profile  Copy your default Chrome profile (cookies, logins)");
   console.log("\nExamples:");
   console.log("  start.ts            # Start with fresh profile");
   console.log("  start.ts --profile  # Start with your Chrome profile");
@@ -32,7 +30,7 @@ execSync("mkdir -p ~/.cache/scraping", { stdio: "ignore" });
 if (useProfile) {
   // Sync profile with rsync (much faster on subsequent runs)
   execSync(
-    `rsync -a --delete "${process.env["HOME"]}/Library/Application Support/Google/Chrome/" ~/.cache/scraping/`,
+    `rsync -a --delete "${process.env.HOME}/Library/Application Support/Google/Chrome/" ~/.cache/scraping/`,
     { stdio: "pipe" },
   );
 }
@@ -42,7 +40,7 @@ spawn(
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
   [
     "--remote-debugging-port=9222",
-    `--user-data-dir=${process.env["HOME"]}/.cache/scraping`,
+    `--user-data-dir=${process.env.HOME}/.cache/scraping`,
     "--profile-directory=Default",
     "--disable-search-engine-choice-screen",
     "--no-first-run",
@@ -75,6 +73,4 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const watcherPath = join(scriptDir, "watch.js");
 spawn(process.execPath, [watcherPath], { detached: true, stdio: "ignore" }).unref();
 
-console.log(
-  `✓ Chrome started on :9222${useProfile ? " with your profile" : ""}`,
-);
+console.log(`✓ Chrome started on :9222${useProfile ? " with your profile" : ""}`);

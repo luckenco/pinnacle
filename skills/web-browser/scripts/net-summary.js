@@ -76,9 +76,7 @@ console.log(`file: ${filePath}`);
 console.log(`requests: ${totalRequests}`);
 console.log(`responses: ${totalResponses}`);
 
-const statuses = Array.from(statusCounts.entries()).sort(
-  (a, b) => Number(a[0]) - Number(b[0]),
-);
+const statuses = Array.from(statusCounts.entries()).sort((a, b) => Number(a[0]) - Number(b[0]));
 for (const [status, count] of statuses) {
   console.log(`status ${status}: ${count}`);
 }

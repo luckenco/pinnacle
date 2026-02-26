@@ -47,10 +47,9 @@ function compactStack(stackTrace) {
 
 function serializeRemoteObject(obj) {
   if (!obj || typeof obj !== "object") return obj;
-  const value =
-    Object.prototype.hasOwnProperty.call(obj, "value")
-      ? obj.value
-      : obj.unserializableValue || obj.description || null;
+  const value = Object.hasOwn(obj, "value")
+    ? obj.value
+    : obj.unserializableValue || obj.description || null;
   return {
     type: obj.type || null,
     subtype: obj.subtype || null,

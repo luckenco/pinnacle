@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { SENTRY_API_BASE, getAuthToken, fetchJson, formatTimestamp, resolveProjectId } from "../lib/auth.js";
+import { fetchJson, getAuthToken, resolveProjectId, SENTRY_API_BASE } from "../lib/auth.js";
 
 const HELP = `Usage: search-events.js [options]
 
@@ -144,7 +144,7 @@ function formatEvent(event, fields) {
   let displayTs = ts;
   try {
     const date = new Date(ts);
-    if (!isNaN(date.getTime())) {
+    if (!Number.isNaN(date.getTime())) {
       displayTs = date.toISOString().replace("T", " ").slice(0, 19);
     }
   } catch {}

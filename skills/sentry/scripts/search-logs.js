@@ -1,14 +1,8 @@
 #!/usr/bin/env node
 
-import { SENTRY_API_BASE, getAuthToken, fetchJson, formatTimestamp } from "../lib/auth.js";
+import { fetchJson, getAuthToken, SENTRY_API_BASE } from "../lib/auth.js";
 
-const LOG_FIELDS = [
-  "sentry.item_id",
-  "trace",
-  "sentry.severity",
-  "timestamp",
-  "message",
-];
+const LOG_FIELDS = ["sentry.item_id", "trace", "sentry.severity", "timestamp", "message"];
 
 /**
  * Parse a Sentry logs explorer URL
@@ -147,7 +141,7 @@ function formatLogEntry(entry) {
   let displayTs = ts;
   try {
     const date = new Date(ts);
-    if (!isNaN(date.getTime())) {
+    if (!Number.isNaN(date.getTime())) {
       displayTs = date.toISOString().replace("T", " ").slice(0, 19);
     }
   } catch {}
