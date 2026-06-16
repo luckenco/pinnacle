@@ -13,6 +13,7 @@
     "extensions",
     "skills",
     "prompts",
+    "themes",
     "README.md",
     "LICENSE"
   ],
@@ -32,6 +33,9 @@
     ],
     "prompts": [
       "./prompts"
+    ],
+    "themes": [
+      "./themes"
     ]
   },
   "peerDependencies": {
