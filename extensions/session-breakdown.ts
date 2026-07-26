@@ -34,7 +34,6 @@ import {
 type ModelKey = string; // `${provider}/${model}`
 
 interface ParsedSession {
-  filePath: string;
   startedAt: Date;
   dayKeyLocal: string; // YYYY-MM-DD (local)
   modelsUsed: Set<ModelKey>;
@@ -79,7 +78,6 @@ interface RGB {
 }
 
 interface BreakdownData {
-  generatedAt: Date;
   ranges: Map<number, RangeAgg>;
   palette: {
     modelColors: Map<ModelKey, RGB>;
@@ -100,14 +98,6 @@ interface BreakdownProgressState {
   foundFiles: number;
   parsedFiles: number;
   totalFiles: number;
-  currentFile?: string;
-}
-
-function sliceByColumn(text: string, start: number, width: number, _respectAnsi = false): string {
-  const chars = Array.from(text);
-  const safeStart = Math.max(0, start);
-  const safeEnd = Math.max(safeStart, safeStart + Math.max(0, width));
-  return chars.slice(safeStart, safeEnd).join("");
 }
 
 function setBorderedLoaderMessage(loader: BorderedLoader, message: string) {
@@ -162,10 +152,6 @@ function weightedMix(colors: Array<{ color: RGB; weight: number }>): RGB {
   }
   if (total <= 0) return EMPTY_CELL_BG;
   return { r: Math.round(r / total), g: Math.round(g / total), b: Math.round(b / total) };
-}
-
-function _ansiBg(rgb: RGB, text: string): string {
-  return `\x1b[48;2;${rgb.r};${rgb.g};${rgb.b}m${text}\x1b[0m`;
 }
 
 function ansiFg(rgb: RGB, text: string): string {
@@ -270,74 +256,43 @@ function extractProviderModelAndUsage(obj: any): {
   };
 }
 
-function extractCostTotal(usage: any): number {
-  if (!usage) return 0;
-  const c = usage?.cost;
-  if (typeof c === "number") return Number.isFinite(c) ? c : 0;
-  if (typeof c === "string") {
-    const n = Number(c);
-    return Number.isFinite(n) ? n : 0;
-  }
-  const t = c?.total;
-  if (typeof t === "number") return Number.isFinite(t) ? t : 0;
-  if (typeof t === "string") {
-    const n = Number(t);
-    return Number.isFinite(n) ? n : 0;
+function firstNumber(...values: unknown[]): number {
+  for (const value of values) {
+    if (typeof value !== "number" && typeof value !== "string") continue;
+    const number = Number(value);
+    if (Number.isFinite(number) && number > 0) return number;
   }
   return 0;
 }
 
+function extractCostTotal(usage: any): number {
+  return firstNumber(usage?.cost, usage?.cost?.total);
+}
+
 function extractTokensTotal(usage: any): number {
-  // Usage format varies across providers and pi versions.
-  // We try a few common shapes:
-  // - { totalTokens }
-  // - { total_tokens }
-  // - { promptTokens, completionTokens }
-  // - { prompt_tokens, completion_tokens }
-  // - { input_tokens, output_tokens }
-  // - { inputTokens, outputTokens }
-  // - { tokens: number | { total } }
   if (!usage) return 0;
 
-  const readNum = (v: any): number => {
-    if (typeof v === "number") return Number.isFinite(v) ? v : 0;
-    if (typeof v === "string") {
-      const n = Number(v);
-      return Number.isFinite(n) ? n : 0;
-    }
-    return 0;
-  };
+  const total = firstNumber(
+    usage.totalTokens,
+    usage.total_tokens,
+    usage.tokens,
+    usage.tokenCount,
+    usage.token_count,
+    usage.tokens?.total,
+    usage.tokens?.totalTokens,
+    usage.tokens?.total_tokens,
+  );
+  if (total) return total;
 
-  let total = 0;
-  // direct totals
-  total =
-    readNum(usage?.totalTokens) ||
-    readNum(usage?.total_tokens) ||
-    readNum(usage?.tokens) ||
-    readNum(usage?.tokenCount) ||
-    readNum(usage?.token_count);
-  if (total > 0) return total;
-
-  // nested tokens object
-  total =
-    readNum(usage?.tokens?.total) ||
-    readNum(usage?.tokens?.totalTokens) ||
-    readNum(usage?.tokens?.total_tokens);
-  if (total > 0) return total;
-
-  // sum of parts
-  const a =
-    readNum(usage?.promptTokens) ||
-    readNum(usage?.prompt_tokens) ||
-    readNum(usage?.inputTokens) ||
-    readNum(usage?.input_tokens);
-  const b =
-    readNum(usage?.completionTokens) ||
-    readNum(usage?.completion_tokens) ||
-    readNum(usage?.outputTokens) ||
-    readNum(usage?.output_tokens);
-  const sum = a + b;
-  return sum > 0 ? sum : 0;
+  return (
+    firstNumber(usage.promptTokens, usage.prompt_tokens, usage.inputTokens, usage.input_tokens) +
+    firstNumber(
+      usage.completionTokens,
+      usage.completion_tokens,
+      usage.outputTokens,
+      usage.output_tokens,
+    )
+  );
 }
 
 async function walkSessionFiles(
@@ -475,7 +430,6 @@ async function parseSessionFile(
   if (!startedAt) return null;
   const dayKeyLocal = toLocalDayKey(startedAt);
   return {
-    filePath,
     startedAt,
     dayKeyLocal,
     modelsUsed,
@@ -579,14 +533,10 @@ function choosePaletteFromLast30Days(
 } {
   // Prefer cost if any cost exists, else tokens, else messages, else sessions.
   const costSum = [...range30.modelCost.values()].reduce((a, b) => a + b, 0);
-  const popularity =
-    costSum > 0
-      ? range30.modelCost
-      : range30.totalTokens > 0
-        ? range30.modelTokens
-        : range30.totalMessages > 0
-          ? range30.modelMessages
-          : range30.modelSessions;
+  let popularity = range30.modelSessions;
+  if (range30.totalMessages > 0) popularity = range30.modelMessages;
+  if (range30.totalTokens > 0) popularity = range30.modelTokens;
+  if (costSum > 0) popularity = range30.modelCost;
 
   const sorted = sortMapByValueDesc(popularity);
   const orderedModels = sorted.slice(0, topN).map((x) => x.key);
@@ -610,18 +560,11 @@ function dayMixedColor(
   const parts: Array<{ color: RGB; weight: number }> = [];
   let otherWeight = 0;
 
-  let map: Map<ModelKey, number>;
+  let map = day.sessionsByModel;
+  if (mode === "messages" && day.messages > 0) map = day.messagesByModel;
   if (mode === "tokens") {
-    map =
-      day.tokens > 0
-        ? day.tokensByModel
-        : day.messages > 0
-          ? day.messagesByModel
-          : day.sessionsByModel;
-  } else if (mode === "messages") {
-    map = day.messages > 0 ? day.messagesByModel : day.sessionsByModel;
-  } else {
-    map = day.sessionsByModel;
+    if (day.messages > 0) map = day.messagesByModel;
+    if (day.tokens > 0) map = day.tokensByModel;
   }
 
   for (const [mk, w] of map.entries()) {
@@ -713,12 +656,7 @@ function renderGraphLines(
 
       const key = toLocalDayKey(cellDate);
       const day = range.dayByKey.get(key);
-      const value =
-        metric.kind === "tokens"
-          ? (day?.tokens ?? 0)
-          : metric.kind === "messages"
-            ? (day?.messages ?? 0)
-            : (day?.sessions ?? 0);
+      const value = day?.[metric.kind] ?? 0;
 
       if (!day || value <= 0) {
         line += ansiFg(EMPTY_CELL_BG, block) + colGap;
@@ -758,40 +696,6 @@ function renderLegendItems(
   }
   items.push(`${ansiFg(otherColor, "█")} other`);
   return items;
-}
-
-function fitRight(text: string, width: number): string {
-  if (width <= 0) return "";
-  let w = visibleWidth(text);
-  let t = text;
-  if (w > width) {
-    t = sliceByColumn(t, w - width, width, true);
-    w = visibleWidth(t);
-  }
-  return " ".repeat(Math.max(0, width - w)) + t;
-}
-
-function _renderLegendBlock(leftLabel: string, items: string[], width: number): string[] {
-  if (width <= 0) return [];
-  if (items.length === 0) return [truncateToWidth(leftLabel, width)];
-
-  const lines: string[] = [];
-  // First line: label on left, first item right-aligned into remaining space.
-  const leftW = visibleWidth(leftLabel);
-  if (leftW >= width) {
-    lines.push(truncateToWidth(leftLabel, width));
-    // Put all items on their own lines right-aligned.
-    for (const it of items) lines.push(fitRight(it, width));
-    return lines;
-  }
-
-  const remaining = Math.max(0, width - leftW);
-  lines.push(leftLabel + fitRight(items[0], remaining));
-
-  for (let i = 1; i < items.length; i++) {
-    lines.push(fitRight(items[i], width));
-  }
-  return lines;
 }
 
 function renderModelTable(range: RangeAgg, mode: MeasurementMode, maxRows = 8): string[] {
@@ -844,22 +748,6 @@ function renderModelTable(range: RangeAgg, mode: MeasurementMode, maxRows = 8): 
   return lines;
 }
 
-function _renderLeftRight(left: string, right: string, width: number): string {
-  const leftW = visibleWidth(left);
-  if (width <= 0) return "";
-  if (leftW >= width) return truncateToWidth(left, width);
-
-  const remaining = width - leftW;
-  let rightText = right;
-  const rightW = visibleWidth(rightText);
-  if (rightW > remaining) {
-    // Keep the *rightmost* part visible.
-    rightText = sliceByColumn(rightText, rightW - remaining, remaining, true);
-  }
-  const pad = Math.max(0, remaining - visibleWidth(rightText));
-  return left + " ".repeat(pad) + rightText;
-}
-
 function rangeSummary(range: RangeAgg, days: number, mode: MeasurementMode): string {
   const avg = range.sessions > 0 ? range.totalCost / range.sessions : 0;
   const costPart =
@@ -891,7 +779,6 @@ async function computeBreakdown(
     foundFiles: 0,
     parsedFiles: 0,
     totalFiles: 0,
-    currentFile: undefined,
   });
 
   const candidates = await walkSessionFiles(SESSION_ROOT, start90, signal, (found) => {
@@ -904,14 +791,13 @@ async function computeBreakdown(
     foundFiles: totalFiles,
     totalFiles,
     parsedFiles: 0,
-    currentFile: totalFiles > 0 ? path.basename(candidates[0]!) : undefined,
   });
 
   let parsedFiles = 0;
   for (const filePath of candidates) {
     if (signal?.aborted) break;
     parsedFiles += 1;
-    onProgress?.({ phase: "parse", parsedFiles, totalFiles, currentFile: path.basename(filePath) });
+    onProgress?.({ phase: "parse", parsedFiles, totalFiles });
 
     const session = await parseSessionFile(filePath, signal);
     if (!session) continue;
@@ -926,10 +812,10 @@ async function computeBreakdown(
     }
   }
 
-  onProgress?.({ phase: "finalize", currentFile: undefined });
+  onProgress?.({ phase: "finalize" });
 
   const palette = choosePaletteFromLast30Days(ranges.get(30)!, 4);
-  return { generatedAt: now, ranges, palette };
+  return { ranges, palette };
 }
 
 class BreakdownComponent implements Component {
@@ -976,35 +862,19 @@ class BreakdownComponent implements Component {
       return;
     }
 
-    const prev = () => {
-      this.rangeIndex = (this.rangeIndex + RANGE_DAYS.length - 1) % RANGE_DAYS.length;
-      this.invalidate();
-      this.tui.requestRender();
-    };
-    const next = () => {
-      this.rangeIndex = (this.rangeIndex + 1) % RANGE_DAYS.length;
-      this.invalidate();
-      this.tui.requestRender();
-    };
+    let nextIndex: number | undefined;
+    if (matchesKey(data, Key.left) || data.toLowerCase() === "h") {
+      nextIndex = this.rangeIndex - 1;
+    } else if (matchesKey(data, Key.right) || data.toLowerCase() === "l") {
+      nextIndex = this.rangeIndex + 1;
+    } else if (data === "1" || data === "2" || data === "3") {
+      nextIndex = Number(data) - 1;
+    }
+    if (nextIndex === undefined) return;
 
-    if (matchesKey(data, Key.left) || data.toLowerCase() === "h") prev();
-    if (matchesKey(data, Key.right) || data.toLowerCase() === "l") next();
-
-    if (data === "1") {
-      this.rangeIndex = 0;
-      this.invalidate();
-      this.tui.requestRender();
-    }
-    if (data === "2") {
-      this.rangeIndex = 1;
-      this.invalidate();
-      this.tui.requestRender();
-    }
-    if (data === "3") {
-      this.rangeIndex = 2;
-      this.invalidate();
-      this.tui.requestRender();
-    }
+    this.rangeIndex = (nextIndex + RANGE_DAYS.length) % RANGE_DAYS.length;
+    this.invalidate();
+    this.tui.requestRender();
   }
 
   render(width: number): string[] {
@@ -1038,7 +908,7 @@ class BreakdownComponent implements Component {
     const summary =
       rangeSummary(range, selectedDays, metric.kind) + dim(`   (graph: ${metric.kind}/day)`);
 
-    const maxScale = selectedDays === 7 ? 4 : selectedDays === 30 ? 3 : 2;
+    const maxScale = 4 - this.rangeIndex;
     const weeks = weeksForRange(range);
     const leftMargin = 4; // "Mon " (or 4 spaces)
     const gap = 1;
@@ -1116,8 +986,8 @@ export default function sessionBreakdownExtension(pi: ExtensionAPI) {
     description:
       "Interactive breakdown of last 7/30/90 days of ~/.pi session usage (sessions/messages/tokens + cost by model)",
     handler: async (_args, ctx: ExtensionContext) => {
-      if (!ctx.hasUI) {
-        // Non-interactive fallback: just notify.
+      if (ctx.mode !== "tui") {
+        // Non-interactive fallback.
         const data = await computeBreakdown(undefined);
         const range = data.ranges.get(30)!;
         pi.sendMessage(
@@ -1142,7 +1012,6 @@ export default function sessionBreakdownExtension(pi: ExtensionAPI) {
           foundFiles: 0,
           parsedFiles: 0,
           totalFiles: 0,
-          currentFile: undefined,
         };
 
         const renderMessage = (): string => {
@@ -1156,19 +1025,12 @@ export default function sessionBreakdownExtension(pi: ExtensionAPI) {
           return `${baseMessage}  finalizing · ${elapsed}s`;
         };
 
-        let intervalId: NodeJS.Timeout | null = null;
-        const stopTicker = () => {
-          if (intervalId) {
-            clearInterval(intervalId);
-            intervalId = null;
-          }
-        };
-
         // Update every 0.5s so long-running scans show some visible progress.
         setBorderedLoaderMessage(loader, renderMessage());
-        intervalId = setInterval(() => {
+        const intervalId = setInterval(() => {
           setBorderedLoaderMessage(loader, renderMessage());
         }, 500);
+        const stopTicker = () => clearInterval(intervalId);
 
         loader.onAbort = () => {
           aborted = true;

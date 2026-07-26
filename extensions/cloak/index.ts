@@ -27,13 +27,11 @@ interface CloakConfig {
 }
 
 interface CompiledCloakPattern {
-  source: string;
   regex: RegExp;
   replace?: string;
 }
 
 interface CompiledCloakRule {
-  filePatterns: string[];
   fileRegexes: RegExp[];
   patterns: CompiledCloakPattern[];
 }
@@ -127,14 +125,12 @@ function ensureGlobalFlags(flags?: string): string {
 function compilePattern(spec: CloakPatternSpec, ruleReplace?: string): CompiledCloakPattern {
   if (typeof spec === "string") {
     return {
-      source: spec,
       regex: new RegExp(spec, "g"),
       replace: ruleReplace,
     };
   }
 
   return {
-    source: spec.pattern,
     regex: new RegExp(spec.pattern, ensureGlobalFlags(spec.flags)),
     replace: spec.replace ?? ruleReplace,
   };
@@ -145,7 +141,6 @@ function compileRule(rule: CloakRuleConfig): CompiledCloakRule {
   const cloakPatterns = toArray(rule.cloakPattern);
 
   return {
-    filePatterns,
     fileRegexes: filePatterns.map(globToRegExp),
     patterns: cloakPatterns.map((pattern) => compilePattern(pattern, rule.replace)),
   };
@@ -195,17 +190,8 @@ function ruleMatchesPath(rule: CompiledCloakRule, rawPath: string, cwd: string):
 }
 
 function repeatToLength(seed: string, length: number): string {
-  if (length <= 0) return "";
-  if (!seed) return "";
-
-  const pieces: string[] = [];
-  let totalLength = 0;
-  while (totalLength < length) {
-    pieces.push(seed);
-    totalLength += seed.length;
-  }
-
-  return pieces.join("").slice(0, length);
+  if (!seed || length <= 0) return "";
+  return seed.repeat(Math.ceil(length / seed.length)).slice(0, length);
 }
 
 function applyReplacementTemplate(template: string, match: string, captures: string[]): string {
@@ -278,33 +264,21 @@ function applyPatternsToLine(
   let changed = false;
 
   for (const pattern of patterns) {
-    let matchedThisPattern = false;
     const next = updated.replace(pattern.regex, (match: string, ...args: unknown[]) => {
-      const captures = args
-        .slice(0, Math.max(0, args.length - 2))
-        .map((value) => String(value ?? ""));
-      const replacement = buildMaskedReplacement(
+      const captures = args.slice(0, -2).map((value) => String(value ?? ""));
+      return buildMaskedReplacement(
         match,
         captures,
         pattern.replace,
         config.cloakCharacter ?? "*",
         config.cloakLength,
       );
-
-      if (replacement !== match) {
-        matchedThisPattern = true;
-      }
-
-      return replacement;
     });
+    if (next === updated) continue;
 
-    if (matchedThisPattern) {
-      updated = next;
-      changed = true;
-      if (!config.tryAllPatterns) {
-        break;
-      }
-    }
+    updated = next;
+    changed = true;
+    if (!config.tryAllPatterns) break;
   }
 
   return { line: updated, changed };
@@ -345,12 +319,8 @@ export function cloakText(
 export default function (pi: ExtensionAPI) {
   let state = loadState();
 
-  const reloadConfig = () => {
+  pi.on("session_start", (_event, ctx) => {
     state = loadState();
-  };
-
-  pi.on("session_start", async (_event, ctx) => {
-    reloadConfig();
 
     if (state.error && ctx.hasUI) {
       ctx.ui.notify(state.error, "warning");
@@ -360,7 +330,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("cloak-status", {
     description: "Show pi-cloak config status",
     handler: async (_args, ctx) => {
-      reloadConfig();
+      state = loadState();
 
       const summary = state.error
         ? `${state.error}\npatterns: ${state.rules.length}`
@@ -370,7 +340,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.on("tool_result", async (event, ctx) => {
+  pi.on("tool_result", (event, ctx) => {
     if (event.toolName !== "read") return undefined;
     if (!state.config.enabled) return undefined;
 
