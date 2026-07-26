@@ -8,14 +8,18 @@ export interface SkillRoot {
   includeRootMarkdownFiles: boolean;
 }
 
+function getHomeDir(): string {
+  return process.env.HOME?.trim() || homedir();
+}
+
 export function getAgentDir(): string {
   const configured = process.env.PI_CODING_AGENT_DIR?.trim();
   if (configured) return expandHome(configured);
-  return join(homedir(), ".pi", "agent");
+  return join(getHomeDir(), ".pi", "agent");
 }
 
 export function getGlobalAgentsSkillDir(): string {
-  return join(homedir(), ".agents", "skills");
+  return join(getHomeDir(), ".agents", "skills");
 }
 
 export function getSkillRoots(cwd: string): SkillRoot[] {
@@ -59,7 +63,7 @@ export function getSkillRoots(cwd: string): SkillRoot[] {
 }
 
 function expandHome(input: string): string {
-  if (input === "~") return homedir();
-  if (input.startsWith("~/")) return join(homedir(), input.slice(2));
+  if (input === "~") return getHomeDir();
+  if (input.startsWith("~/")) return join(getHomeDir(), input.slice(2));
   return input;
 }
