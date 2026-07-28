@@ -26,18 +26,10 @@ const SHELL_META_RE = /[;&|<>`]/;
 const WRANGLER_TYPES_ONLY_RE =
   /^\s*(?:(?:env|export)\s+[^\s]+\s+)*((?:\.\/node_modules\/\.bin\/)?wrangler|(?:npx|bunx)\s+wrangler|(?:npm|pnpm|yarn|bun)\s+(?:exec\s+|dlx\s+)?wrangler)\s+types(?:\s+[^;&|<>`]*)?\s*$/;
 
-function normalizeToolPath(path: string): string {
-  return path.replace(/^@/, "").replaceAll("\\", "/");
-}
-
 function isProtectedPath(path: unknown): boolean {
   if (typeof path !== "string") return false;
-  const normalized = normalizeToolPath(path);
+  const normalized = path.replace(/^@/, "").replaceAll("\\", "/");
   return normalized.split("/").at(-1) === PROTECTED_FILE;
-}
-
-function referencesProtectedFile(command: string): boolean {
-  return PROTECTED_FILE_RE.test(command);
 }
 
 function isWranglerTypesOnly(command: string): boolean {
@@ -46,30 +38,18 @@ function isWranglerTypesOnly(command: string): boolean {
 }
 
 function appearsToModifyProtectedFile(command: string): boolean {
-  if (!referencesProtectedFile(command)) return false;
-  if (isWranglerTypesOnly(command)) return false;
-
+  if (!PROTECTED_FILE_RE.test(command) || isWranglerTypesOnly(command)) return false;
   return OUTPUT_REDIRECTION_RE.test(command) || BASH_MUTATION_RE.test(command);
 }
 
 export default function (pi: ExtensionAPI) {
   pi.on("tool_call", (event, ctx) => {
-    if (isToolCallEventType("write", event) || isToolCallEventType("edit", event)) {
-      if (isProtectedPath(event.input.path)) {
-        if (ctx.hasUI) {
-          ctx.ui.notify(
-            `Blocked manual change to ${PROTECTED_FILE}; run wrangler types.`,
-            "warning",
-          );
-        }
-        return { block: true, reason: BLOCK_REASON };
-      }
-
-      return;
-    }
-
-    if (!isToolCallEventType("bash", event)) return;
-    if (!appearsToModifyProtectedFile(event.input.command)) return;
+    const changesFile =
+      (isToolCallEventType("write", event) || isToolCallEventType("edit", event)) &&
+      isProtectedPath(event.input.path);
+    const changesViaShell =
+      isToolCallEventType("bash", event) && appearsToModifyProtectedFile(event.input.command);
+    if (!changesFile && !changesViaShell) return;
 
     if (ctx.hasUI) {
       ctx.ui.notify(`Blocked manual change to ${PROTECTED_FILE}; run wrangler types.`, "warning");
