@@ -1,6 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import * as piAi from "@earendil-works/pi-ai";
 import {
   type Context,
   clampThinkingLevel,
@@ -8,22 +7,21 @@ import {
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import {
+  streamOpenAICodexResponses as streamCodex,
+  streamSimpleOpenAICodexResponses as streamSimpleCodex,
+} from "@earendil-works/pi-ai/compat";
+import {
   type ExtensionAPI,
   type ExtensionContext,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 
-const {
-  streamOpenAICodexResponses: streamCodex,
-  streamSimpleOpenAICodexResponses: streamSimpleCodex,
-} = piAi as typeof import("@earendil-works/pi-ai/compat");
 const STATUS_KEY = "codex-fast";
-export const FAST_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
 type CodexModel = Model<"openai-codex-responses">;
 type CodexStreamers = { full: typeof streamCodex; simple: typeof streamSimpleCodex };
 
-export function isFastModel(model: Pick<Model<string>, "provider" | "id"> | undefined): boolean {
-  return model?.provider === "openai-codex" && FAST_MODELS.has(model.id);
+export function isCodex(model: Pick<Model<string>, "provider"> | undefined): boolean {
+  return model?.provider === "openai-codex";
 }
 
 const configPath = (agentDir: string) => join(agentDir, "extensions", "codex-fast.json");
@@ -52,7 +50,7 @@ export function routeCodex(
   enabled: boolean,
   streamers: CodexStreamers = { full: streamCodex, simple: streamSimpleCodex },
 ) {
-  if (!enabled || !isFastModel(model)) return streamers.simple(model, context, options);
+  if (!enabled || !isCodex(model)) return streamers.simple(model, context, options);
   const effort = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
   return streamers.full(model, context, {
     ...options,
@@ -67,8 +65,7 @@ export default function codexFast(pi: ExtensionAPI) {
 
   const syncStatus = (ctx: ExtensionContext) => {
     if (!ctx.hasUI) return;
-    const status =
-      enabled && isFastModel(ctx.model) ? ctx.ui.theme.fg("accent", "⚡ Fast") : undefined;
+    const status = enabled && isCodex(ctx.model) ? ctx.ui.theme.fg("accent", "⚡ Fast") : undefined;
     ctx.ui.setStatus(STATUS_KEY, status);
   };
 
@@ -83,7 +80,7 @@ export default function codexFast(pi: ExtensionAPI) {
   pi.on("session_shutdown", (_event, ctx) => ctx.ui.setStatus(STATUS_KEY, undefined));
 
   pi.registerCommand("fast", {
-    description: "Enable or disable Codex Fast Mode",
+    description: "Request Codex priority service (increased usage); toggle or on/off",
     handler: async (args, ctx) => {
       const action = args.trim().toLowerCase();
       if (action !== "" && action !== "on" && action !== "off") {

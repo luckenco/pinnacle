@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createAssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
-import { isFastModel, loadFastMode, routeCodex } from "./index";
+import { isCodex, loadFastMode, routeCodex } from "./index";
 
 const model = (id: string) =>
   ({
@@ -14,11 +14,15 @@ const model = (id: string) =>
   }) as Model<"openai-codex-responses">;
 const context = { messages: [] };
 
-test("all GPT-5.6 models are eligible", () => {
-  for (const id of ["sol", "terra", "luna"]) assert.ok(isFastModel(model(`gpt-5.6-${id}`)));
+test("Codex detection is provider-scoped, not model-name-scoped", () => {
+  for (const id of ["gpt-6-astra", "gpt-5.6-sol", "future-model"]) {
+    assert.ok(isCodex(model(id)));
+    assert.equal(isCodex({ ...model(id), provider: "openai" }), false);
+  }
+  assert.equal(isCodex(undefined), false);
 });
 
-test("priority routing applies only when eligible and enabled", () => {
+test("priority routing applies to any Codex model only when enabled", () => {
   const calls: string[] = [];
   const result = createAssistantMessageEventStream();
   const record = (call: string) => {
@@ -29,10 +33,45 @@ test("priority routing applies only when eligible and enabled", () => {
     full: (_model, _context, options) => record(options?.serviceTier ?? "none"),
     simple: () => record("simple"),
   };
-  routeCodex(model("gpt-5.6-sol"), context, undefined, true, streamers);
-  routeCodex(model("gpt-5.6-sol"), context, undefined, false, streamers);
-  routeCodex(model("gpt-5.5"), context, undefined, true, streamers);
-  assert.deepEqual(calls, ["priority", "simple", "simple"]);
+  for (const id of [
+    "gpt-6-astra",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "future-model",
+  ]) {
+    assert.equal(routeCodex(model(id), context, undefined, true, streamers), result);
+    assert.equal(routeCodex(model(id), context, undefined, false, streamers), result);
+    assert.equal(
+      routeCodex({ ...model(id), provider: "openai" }, context, undefined, true, streamers),
+      result,
+    );
+    assert.deepEqual(calls.splice(0), ["priority", "simple", "simple"]);
+  }
+});
+
+test("priority routing preserves reasoning and request options", () => {
+  const astra = { ...model("gpt-6-astra"), reasoning: true };
+  const options = {
+    reasoning: "high" as const,
+    signal: new AbortController().signal,
+    sessionId: "test",
+  };
+  const result = createAssistantMessageEventStream();
+  const streamers: NonNullable<Parameters<typeof routeCodex>[4]> = {
+    full: (model, ctx, actual) => {
+      assert.equal(model, astra);
+      assert.equal(ctx, context);
+      assert.deepEqual(actual, { ...options, reasoningEffort: "high", serviceTier: "priority" });
+      return result;
+    },
+    simple: (_model, _ctx, actual) => {
+      assert.equal(actual, options);
+      return result;
+    },
+  };
+  routeCodex(astra, context, options, true, streamers);
+  routeCodex(astra, context, options, false, streamers);
 });
 
 test("absent or malformed config safely defaults to off", () => {
