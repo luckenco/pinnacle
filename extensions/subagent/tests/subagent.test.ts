@@ -96,16 +96,18 @@ test("parallel returns successful results and failed child diagnostics separatel
       tasks: [
         { name: "first", task: "inspect" },
         { name: "second", task: "fail" },
+        { name: "empty", task: "empty" },
       ],
     },
     undefined,
     undefined,
     ctx,
   );
-  assert.match(text(result), /1\/2 succeeded/);
+  assert.match(text(result), /1\/3 succeeded/);
   assert.match(text(result), /inspect ✓/);
   assert.match(text(result), /second \(failed/);
   assert.match(text(result), /fixture failure/);
+  assert.match(text(result), /Subagent produced no assistant response/);
 });
 
 test("chains substitute previous output and stop at a failed child", async () => {
@@ -136,6 +138,14 @@ test("chains substitute previous output and stop at a failed child", async () =>
 test("invalid modes and oversized batches fail without running children", async () => {
   await assert.rejects(tool.execute("invalid", {}, undefined, undefined, ctx), /exactly one/);
   await assert.rejects(
+    tool.execute("empty", { tasks: [] }, undefined, undefined, ctx),
+    /at least one/,
+  );
+  await assert.rejects(
+    tool.execute("mixed", { tasks: [], chain: [{ task: "inspect" }] }, undefined, undefined, ctx),
+    /exactly one/,
+  );
+  await assert.rejects(
     tool.execute(
       "oversized",
       { tasks: Array.from({ length: 9 }, () => ({ task: "inspect" })) },
@@ -164,7 +174,7 @@ test("cancellation kills a child ignoring SIGTERM", { timeout: 12000 }, async ()
           const part = message.content.find(
             (part) => part.type === "text" && part.text.startsWith("{"),
           );
-          if (!part || part.type !== "text") return;
+          if (part?.type !== "text") return;
           pid = JSON.parse(part.text).pid;
           controller.abort();
         },

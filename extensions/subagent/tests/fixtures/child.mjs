@@ -1,5 +1,6 @@
 const args = process.argv.slice(2);
 const task = args.at(-1).replace(/^Task: /, "");
+if (task === "empty") process.exit(0);
 if (task === "fail") {
   process.stderr.write("fixture failure");
   process.exit(7);

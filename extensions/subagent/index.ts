@@ -25,6 +25,7 @@ const Task = Type.Object({
   ),
   tools: Type.Optional(
     Type.Array(Type.String(), {
+      minItems: 1,
       description:
         "Explicit child tool allowlist; default read, grep, find, ls. Include bash/edit/write only when needed.",
     }),
@@ -68,7 +69,12 @@ function finalText(messages: Message[]): string {
 }
 
 function failed(result: Result): boolean {
-  return result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+  return (
+    result.exitCode !== 0 ||
+    !!result.error ||
+    result.stopReason === "error" ||
+    result.stopReason === "aborted"
+  );
 }
 
 function output(result: Result): string {
@@ -181,6 +187,8 @@ function run(
       result.exitCode = code ?? 1;
       if (result.exitCode !== 0)
         result.error ??= stderr || `Subagent exited with code ${result.exitCode}`;
+      if (!result.messages.some((message) => message.role === "assistant"))
+        result.error ??= "Subagent produced no assistant response";
       resolve(result);
     });
   });
@@ -200,10 +208,13 @@ export default function subagent(pi: ExtensionAPI) {
       "Run one self-contained task, independent parallel tasks, or a sequential chain in separate Pi processes. The child has a fresh conversation, not a separate filesystem. Default tools are read-only (read, grep, find, ls); set tools explicitly to allow writing, Bash, or MCP. Specify model per task to use different models. A chain substitutes {previous} with the previous answer. Give parallel writers separate working directories.",
     parameters: Params,
     async execute(_id, params, signal, onUpdate, ctx) {
-      const modes = [params.task, params.tasks?.length, params.chain?.length].filter(Boolean);
+      const modes = [params.task, params.tasks, params.chain].filter(
+        (value) => value !== undefined,
+      );
       if (modes.length !== 1) throw new Error("Provide exactly one of task, tasks, or chain.");
       const mode: Mode = params.task ? "single" : params.tasks ? "parallel" : "chain";
       const briefs = params.task ? [params.task] : (params.tasks ?? params.chain ?? []);
+      if (briefs.length === 0) throw new Error("Provide at least one task.");
       if (briefs.length > MAX_TASKS) throw new Error(`Maximum ${MAX_TASKS} tasks per call.`);
       const parentModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
       const results: Result[] = new Array(briefs.length);
