@@ -3,7 +3,11 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createAssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
+import {
+  createAssistantMessageEventStream,
+  type Model,
+  normalizeContext,
+} from "@earendil-works/pi-ai";
 import { isCodex, loadFastMode, routeCodex } from "./index";
 
 const model = (id: string) =>
@@ -12,7 +16,7 @@ const model = (id: string) =>
     provider: "openai-codex",
     api: "openai-codex-responses",
   }) as Model<"openai-codex-responses">;
-const context = { messages: [] };
+const context = normalizeContext({ messages: [] });
 
 test("Codex detection is provider-scoped, not model-name-scoped", () => {
   for (const id of ["gpt-6-astra", "gpt-5.6-sol", "future-model"]) {

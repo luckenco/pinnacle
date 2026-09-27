@@ -1,10 +1,10 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  type Context,
   clampThinkingLevel,
   type Model,
   type SimpleStreamOptions,
+  type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import {
   streamOpenAICodexResponses as streamCodex,
@@ -45,7 +45,7 @@ function saveFastMode(agentDir: string, enabled: boolean): void {
 
 export function routeCodex(
   model: CodexModel,
-  context: Context,
+  context: TranscriptContext,
   options: SimpleStreamOptions | undefined,
   enabled: boolean,
   streamers: CodexStreamers = { full: streamCodex, simple: streamSimpleCodex },
