@@ -108,7 +108,9 @@ export class SkillPicker implements Component, Focusable {
         .map((line) => truncateToWidth(line, width));
     }
 
-    const pageSize = Math.min(8, Math.max(1, height - 12));
+    // Reserve header, metadata and footer rows; give the list the remaining space.
+    const descriptionRows = Math.max(1, Math.min(10, Math.floor((height - 10) / 3)));
+    const pageSize = height - 10 - descriptionRows;
 
     const start = Math.max(
       0,
@@ -132,6 +134,9 @@ export class SkillPicker implements Component, Focusable {
     if (!this.skills.length) lines.push(this.theme.fg("muted", "No skills loaded in this session"));
     else if (!this.matches.length) lines.push(this.theme.fg("muted", "No matching skills"));
 
+    // Keep details in place when filtering reduces the number of matches.
+    while (lines.length < 3 + pageSize) lines.push("");
+
     const selected = this.matches[this.cursor];
 
     if (selected) {
@@ -148,6 +153,8 @@ export class SkillPicker implements Component, Focusable {
       this.detailOffset = Math.min(this.detailOffset, Math.max(0, description.length - available));
       lines.push(...description.slice(this.detailOffset, this.detailOffset + available));
 
+      while (lines.length < height - 2) lines.push("");
+
       if (description.length > available) {
         lines.push(
           this.theme.fg(
@@ -158,6 +165,8 @@ export class SkillPicker implements Component, Focusable {
       }
     }
 
+    // A fixed height prevents the centered overlay from moving between selections.
+    while (lines.length < height - 1) lines.push("");
     lines.push(this.theme.fg("dim", "Enter select · Esc cancel"));
 
     return lines.slice(0, height).map((line) => truncateToWidth(line, width));

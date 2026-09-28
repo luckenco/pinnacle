@@ -35,18 +35,15 @@ const catalog = [
 
 function open(skills = catalog, rows = 26) {
   const results: (Skill | undefined)[] = [];
+  const terminal = { rows };
 
-  const picker = new SkillPicker(
-    skills,
-    { terminal: { rows }, requestRender() {} },
-    theme,
-    keys,
-    (value) => results.push(value),
+  const picker = new SkillPicker(skills, { terminal, requestRender() {} }, theme, keys, (value) =>
+    results.push(value),
   );
 
   picker.focused = true;
 
-  return { picker, results };
+  return { picker, results, terminal };
 }
 
 test("alphabetical default and name matches before description matches", () => {
@@ -110,6 +107,62 @@ test("long details can scroll and narrow layouts fit", () => {
   assert.ok(after.every((line) => visibleWidth(line) <= 28));
   assert.ok(after.length <= 18);
   assert.match(after.join("\n"), /Esc cancel/);
+});
+
+test("navigation, detail scrolling and filtering keep layout positions stable", () => {
+  const skills = [skill("brief", "Short."), skill("verbose", "界 words ".repeat(200))];
+
+  for (const rows of [14, 26, 60]) {
+    for (const width of [28, 100]) {
+      const { picker } = open(skills, rows);
+      const before = picker.render(width);
+      const descriptionRow = before.indexOf("Description:");
+      assert.ok(descriptionRow > 0);
+      assert.equal(before.length, rows - 2);
+
+      for (const input of ["\x1b[B", "\x1b[6~", "\x1b[5~", "verbose", "missing"]) {
+        picker.handleInput(input);
+        const lines = picker.render(width);
+        assert.equal(lines.length, before.length);
+        assert.equal(lines[0], before[0]);
+        assert.equal(lines.at(-1), before.at(-1));
+        assert.ok(lines.every((line) => visibleWidth(line) <= width));
+
+        if (input === "missing") assert.match(lines.join("\n"), /No matching skills/);
+        else assert.equal(lines.indexOf("Description:"), descriptionRow);
+      }
+
+      assert.equal(open([], rows).picker.render(width).length, before.length);
+    }
+  }
+});
+
+test("larger terminals show more skills and resizing keeps the selection visible", () => {
+  const skills = Array.from({ length: 80 }, (_, i) =>
+    skill(`skill-${String(i).padStart(2, "0")}`, "Description."),
+  );
+
+  const { picker, terminal, results } = open(skills, 26);
+  const small = picker.render(100).filter((line) => /^[› ] skill-/.test(line)).length;
+
+  terminal.rows = 60;
+  const large = picker.render(100);
+  assert.equal(large.length, 58);
+  assert.ok(large.filter((line) => /^[› ] skill-/.test(line)).length > small);
+  assert.ok(large.filter((line) => /^[› ] skill-/.test(line)).length > 8);
+
+  for (let i = 0; i < skills.length; i++) picker.handleInput("\x1b[B");
+
+  for (const rows of [60, 20, 14, 80]) {
+    terminal.rows = rows;
+    const lines = picker.render(60);
+    assert.equal(lines.length, rows - 2);
+    assert.match(lines.join("\n"), /› skill-79/);
+    assert.equal(lines.at(-1), "Enter select · Esc cancel");
+  }
+
+  picker.handleInput("\r");
+  assert.deepEqual(results, [skills.at(-1)]);
 });
 
 test("selection replaces an existing draft; cancellation preserves it", async () => {
