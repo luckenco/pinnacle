@@ -79,11 +79,6 @@ interface RGB {
 
 interface BreakdownData {
   ranges: Map<number, RangeAgg>;
-  palette: {
-    modelColors: Map<ModelKey, RGB>;
-    otherColor: RGB;
-    orderedModels: ModelKey[];
-  };
 }
 
 const SESSION_ROOT = path.join(os.homedir(), ".pi", "agent", "sessions");
@@ -443,7 +438,7 @@ async function parseSessionFile(
   };
 }
 
-function buildRangeAgg(days: number, now: Date): RangeAgg {
+export function buildRangeAgg(days: number, now: Date): RangeAgg {
   const end = localMidnight(now);
   const start = addDaysLocal(end, -(days - 1));
   const outDays: DayAgg[] = [];
@@ -524,8 +519,8 @@ function sortMapByValueDesc<K extends string>(m: Map<K, number>): Array<{ key: K
   return [...m.entries()].map(([key, value]) => ({ key, value })).sort((a, b) => b.value - a.value);
 }
 
-function choosePaletteFromLast30Days(
-  range30: RangeAgg,
+function choosePalette(
+  range: RangeAgg,
   topN = 4,
 ): {
   modelColors: Map<ModelKey, RGB>;
@@ -533,11 +528,11 @@ function choosePaletteFromLast30Days(
   orderedModels: ModelKey[];
 } {
   // Prefer cost if any cost exists, else tokens, else messages, else sessions.
-  const costSum = [...range30.modelCost.values()].reduce((a, b) => a + b, 0);
-  let popularity = range30.modelSessions;
-  if (range30.totalMessages > 0) popularity = range30.modelMessages;
-  if (range30.totalTokens > 0) popularity = range30.modelTokens;
-  if (costSum > 0) popularity = range30.modelCost;
+  const costSum = [...range.modelCost.values()].reduce((a, b) => a + b, 0);
+  let popularity = range.modelSessions;
+  if (range.totalMessages > 0) popularity = range.modelMessages;
+  if (range.totalTokens > 0) popularity = range.modelTokens;
+  if (costSum > 0) popularity = range.modelCost;
 
   const sorted = sortMapByValueDesc(popularity);
   const orderedModels = sorted.slice(0, topN).map((x) => x.key);
@@ -814,11 +809,10 @@ async function computeBreakdown(
 
   onProgress?.({ phase: "finalize" });
 
-  const palette = choosePaletteFromLast30Days(ranges.get(30)!, 4);
-  return { ranges, palette };
+  return { ranges };
 }
 
-class BreakdownComponent implements Component {
+export class BreakdownComponent implements Component {
   private data: BreakdownData;
   private tui: TUI;
   private onDone: () => void;
@@ -900,10 +894,12 @@ class BreakdownComponent implements Component {
       `${bold("Session breakdown")}  ${RANGE_DAYS.map(tab).join(" ")}  ` +
       `${metricTab("sessions", "sess")} ${metricTab("messages", "msg")} ${metricTab("tokens", "tok")}`;
 
+    const palette = choosePalette(range);
+    const legendTitle = dim(`Top models (${selectedDays}d palette):`);
     const legendItems = renderLegendItems(
-      this.data.palette.modelColors,
-      this.data.palette.orderedModels,
-      this.data.palette.otherColor,
+      palette.modelColors,
+      palette.orderedModels,
+      palette.otherColor,
     );
 
     const summary =
@@ -921,8 +917,8 @@ class BreakdownComponent implements Component {
 
     const graphLines = renderGraphLines(
       range,
-      this.data.palette.modelColors,
-      this.data.palette.otherColor,
+      palette.modelColors,
+      palette.otherColor,
       this.measurement,
       { cellWidth, gap },
     );
@@ -943,7 +939,7 @@ class BreakdownComponent implements Component {
 
     if (showSideLegend) {
       const legendBlock: string[] = [];
-      legendBlock.push(dim("Top models (30d palette):"));
+      legendBlock.push(legendTitle);
       legendBlock.push(...legendItems);
       // Fit into 7 rows (same as graph). If too many, show a final "+N more" line.
       const maxLegendRows = graphLines.length;
@@ -969,7 +965,7 @@ class BreakdownComponent implements Component {
       for (const gl of graphLines) lines.push(truncateToWidth(gl, width));
       lines.push("");
       // Compact legend below, left-aligned.
-      lines.push(truncateToWidth(dim("Top models (30d palette):"), width));
+      lines.push(truncateToWidth(legendTitle, width));
       for (const it of legendItems) lines.push(truncateToWidth(it, width));
     }
 
