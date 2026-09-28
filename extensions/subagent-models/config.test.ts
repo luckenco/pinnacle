@@ -31,12 +31,11 @@ test("missing config is empty; exact IDs, order and role-specific reasoning roun
   saveConfig(path, initial.raw, config);
   const saved = loadConfig(path);
   assert.deepEqual(saved.config, config);
-  saveConfig(path, saved.raw, { eye: [], hand: null, reasoning: { eye: {}, hand: null } });
-  assert.deepEqual(loadConfig(path).config, {
-    eye: [],
-    hand: null,
-    reasoning: { eye: {}, hand: null },
-  });
+  assert.throws(
+    () => saveConfig(path, saved.raw, { eye: [], hand: null, reasoning: { eye: {}, hand: null } }),
+    /at least one eye and one hand/,
+  );
+  assert.deepEqual(loadConfig(path).config, config);
   assert.deepEqual(readdirSync(join(root, "extensions")), ["subagent-models.json"]);
 });
 
@@ -81,15 +80,15 @@ test("invalid or unreadable configuration is not silently reset", () => {
 
 test("stale sessions cannot overwrite another writer's creation, edit or deletion", () => {
   saveConfig(path, null, config);
-  assert.throws(() => saveConfig(path, null, { ...config, eye: [] }), /changed/);
+  assert.throws(() => saveConfig(path, null, { ...config, hand: "other/hand" }), /changed/);
   const baseline = loadConfig(path).raw;
   saveConfig(path, baseline, {
     ...config,
-    hand: null,
-    reasoning: { ...config.reasoning, hand: null },
+    hand: "other/hand",
+    reasoning: { ...config.reasoning, hand: "high" },
   });
   assert.throws(() => saveConfig(path, baseline, config), /changed/);
-  assert.equal(loadConfig(path).config.hand, null);
+  assert.equal(loadConfig(path).config.hand, "other/hand");
   rmSync(path);
   assert.throws(() => saveConfig(path, baseline, config), /changed/);
   assert.deepEqual(readdirSync(join(root, "extensions")), []);

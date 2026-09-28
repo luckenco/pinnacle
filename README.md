@@ -4,8 +4,8 @@ Personal Pi package for extensions, skills, prompts, and themes.
 
 - [Subagents](extensions/subagent/README.md): self-contained task dispatch, with single,
   parallel, and chained execution.
-- [Subagent model preferences](extensions/subagent-models/README.md): `/subagent-models`
-  configures an ordered eye pool and one hand model; dispatch integration is a separate step.
+- [Subagent model roles](extensions/subagent-models/README.md): `/subagent-models`
+  configures an ordered eye pool and one hand model with reasoning-aware dispatch.
 - [Workflows](skills/): `blast-radius`, `create-verification-skill`, `how`, `why`,
   `arena`, `architect`, `interrogate`, `hillclimb`, `show-me-your-work`, and `unslop`.
   Shared [principles](skills/principles/) are reference files, not separate skill commands.

@@ -37,7 +37,11 @@ function open(initial: SubagentModels = empty(), models: Model<Api>[] | null = a
 }
 
 test("Enter requires an explicit supported reasoning level before adding an eye", () => {
-  const { picker, results } = open();
+  const { picker, results } = open({
+    eye: [],
+    hand: "codex/hand",
+    reasoning: { eye: {}, hand: "off" },
+  });
   picker.handleInput("Independent");
   picker.handleInput("\r");
   assert.match(picker.render(100).join("\n"), /EYE › router\/family\/reviewer › reasoning/);
@@ -51,8 +55,8 @@ test("Enter requires an explicit supported reasoning level before adding an eye"
   assert.deepEqual(results, [
     {
       eye: ["router/family/reviewer"],
-      hand: null,
-      reasoning: { eye: { "router/family/reviewer": "low" }, hand: null },
+      hand: "codex/hand",
+      reasoning: { eye: { "router/family/reviewer": "low" }, hand: "off" },
     },
   ]);
 });
@@ -60,8 +64,8 @@ test("Enter requires an explicit supported reasoning level before adding an eye"
 test("existing eye levels edit independently and reordered entries keep their levels", () => {
   const initial: SubagentModels = {
     eye: ["codex/eye"],
-    hand: null,
-    reasoning: { eye: { "codex/eye": "high" }, hand: null },
+    hand: "codex/hand",
+    reasoning: { eye: { "codex/eye": "high" }, hand: "off" },
   };
   const { picker, results } = open(initial);
   picker.handleInput("Independent");
@@ -72,8 +76,8 @@ test("existing eye levels edit independently and reordered entries keep their le
   picker.handleInput("\x13");
   assert.deepEqual(results[0], {
     eye: ["router/family/reviewer", "codex/eye"],
-    hand: null,
-    reasoning: { eye: { "codex/eye": "high", "router/family/reviewer": "off" }, hand: null },
+    hand: "codex/hand",
+    reasoning: { eye: { "codex/eye": "high", "router/family/reviewer": "off" }, hand: "off" },
   });
   assert.deepEqual(initial.reasoning.eye, { "codex/eye": "high" });
 });
@@ -86,8 +90,8 @@ test("search preserves assigned eye order while reordering matching rows", () =>
   const { picker, results } = open(
     {
       eye: ["test/alphabet", "test/alpha"],
-      hand: null,
-      reasoning: { eye: { "test/alphabet": "high", "test/alpha": "low" }, hand: null },
+      hand: "codex/hand",
+      reasoning: { eye: { "test/alphabet": "high", "test/alpha": "low" }, hand: "off" },
     },
     models,
   );
@@ -143,8 +147,8 @@ test("editing a different hand model does not preselect the previous model's lev
 test("unsupported saved level requires an explicit new selection", () => {
   const initial: SubagentModels = {
     eye: ["codex/hand"],
-    hand: null,
-    reasoning: { eye: { "codex/hand": "high" }, hand: null },
+    hand: "codex/hand",
+    reasoning: { eye: { "codex/hand": "high" }, hand: "off" },
   };
   const { picker, results } = open(initial, [available[2]]);
   picker.handleInput("\r");
@@ -182,15 +186,26 @@ test("reasoning hints use the configured navigation, confirm and cancel keys", (
   assert.match(lines, /alt\+l back/);
 });
 
-test("Escape backs out of a reasoning choice without changing the draft", () => {
+test("incomplete Save stays open with an inline warning and preserves the draft", () => {
   const { picker, results } = open();
   picker.handleInput("\r");
   picker.handleInput("\x1b[B");
-  picker.handleInput("\x1b");
+  picker.handleInput("\r"); // Add the eye at off.
   picker.handleInput("\x13");
-  assert.deepEqual(results, [empty()]);
-  picker.handleInput("\x1b");
-  assert.deepEqual(results, [empty(), undefined]);
+  assert.deepEqual(results, []);
+  assert.match(picker.render(100).join("\n"), /Cannot save · hand required/);
+
+  picker.handleInput("\t");
+  picker.handleInput("codex/hand");
+  picker.handleInput("\r");
+  picker.handleInput("\x1b[B");
+  picker.handleInput("\r");
+  picker.handleInput("\x13");
+  assert.deepEqual(results[0], {
+    eye: ["codex/eye"],
+    hand: "codex/hand",
+    reasoning: { eye: { "codex/eye": "off" }, hand: "off" },
+  });
 });
 
 test("Remove drops eye and hand independently and prunes their reasoning", () => {
@@ -208,7 +223,8 @@ test("Remove drops eye and hand independently and prunes their reasoning", () =>
   picker.handleInput("\x1b[B");
   picker.handleInput("\r");
   picker.handleInput("\x13");
-  assert.deepEqual(results[0], empty());
+  assert.deepEqual(results, []);
+  assert.match(picker.render(100).join("\n"), /Cannot save · eye and hand required/);
   assert.equal(initial.eye[0], "codex/eye");
 });
 
@@ -234,8 +250,8 @@ test("unavailable saved assignments and unsupported levels remain visible until 
   picker.handleInput("\r"); // Unavailable hand: remove only.
   picker.handleInput("\r");
   picker.handleInput("\x13");
-  assert.deepEqual(results[2]?.hand, null);
-  assert.equal(results[2]?.reasoning.hand, null);
+  assert.equal(results.length, 2);
+  assert.match(picker.render(100).join("\n"), /Cannot save · hand required/);
 });
 
 test("no-match, tiny panes and resizing keep choices visible and avoid blind editing", () => {
@@ -265,7 +281,8 @@ test("no-match, tiny panes and resizing keep choices visible and avoid blind edi
   picker.handleInput("no-such-model");
   for (const key of ["\r", "\x1b[A", "\x1b[B", "\x1b[6~"]) picker.handleInput(key);
   picker.handleInput("\x13");
-  assert.deepEqual(results, [empty()]);
+  assert.deepEqual(results, []);
+  assert.match(picker.render(80).join("\n"), /Cannot save · eye and hand required/);
 });
 
 test("rendering fits narrow widths and forwards focus to the active input", () => {

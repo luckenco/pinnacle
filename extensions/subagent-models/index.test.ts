@@ -51,13 +51,14 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-test("refresh precedes choices; cancel and unchanged Save never write a file", async () => {
+test("refresh precedes choices; cancel and incomplete Save never write a file", async () => {
   await configure(ctx, path);
   assert.deepEqual(events, ["refresh", "available", "picker"]);
   assert.equal(loadConfig(path).raw, null);
   draft = { eye: [], hand: null, reasoning: { eye: {}, hand: null } };
   await configure(ctx, path);
   assert.equal(loadConfig(path).raw, null);
+  assert.match(notices.at(-1) ?? "", /at least one eye and one hand/);
 });
 
 test("command picker selects, saves and reloads a model ID with spaces; refresh failure remains removable", async () => {
@@ -92,34 +93,37 @@ test("command picker selects, saves and reloads a model ID with spaces; refresh 
     if (failed) {
       assert.match(picker.render(80).join("\n"), /catalog unavailable/);
       assert.doesNotMatch(picker.render(80).join("\n"), /\[unavailable\]/);
-      picker.handleInput("\r"); // Saved assignment can only be removed.
-      picker.handleInput("\r");
-    } else {
-      picker.handleInput("my model");
-      picker.handleInput("\r");
-      picker.handleInput("\x1b[B"); // off
-      picker.handleInput("\x1b[B"); // minimal
-      picker.handleInput("\r");
+      picker.handleInput("\x1b");
+      return chosen;
     }
+    picker.handleInput("my model");
+    picker.handleInput("\r");
+    picker.handleInput("\x1b[B"); // off
+    picker.handleInput("\x1b[B"); // minimal
+    picker.handleInput("\r");
+    picker.handleInput("\t");
+    picker.handleInput("\r");
+    picker.handleInput("\x1b[B"); // off
+    picker.handleInput("\r");
     picker.handleInput("\x13");
     return chosen;
   }) as never;
   await configure(ctx, path);
   assert.deepEqual(loadConfig(path).config, {
     eye: ["custom/my model"],
-    hand: null,
-    reasoning: { eye: { "custom/my model": "minimal" }, hand: null },
+    hand: "custom/my model",
+    reasoning: { eye: { "custom/my model": "minimal" }, hand: "off" },
   });
-  assert.match(notices.join("\n"), /Saved.*Routing is unchanged/);
+  assert.match(notices.join("\n"), /Saved subagent model preferences/);
   failed = true;
   ctx.modelRegistry.refresh = async () => {
     throw new Error("offline");
   };
   await configure(ctx, path);
   assert.deepEqual(loadConfig(path).config, {
-    eye: [],
-    hand: null,
-    reasoning: { eye: {}, hand: null },
+    eye: ["custom/my model"],
+    hand: "custom/my model",
+    reasoning: { eye: { "custom/my model": "minimal" }, hand: "off" },
   });
 });
 
@@ -159,8 +163,8 @@ test("a config edit while the picker is open is not overwritten", async () => {
     writeFileSync(path, other);
     return {
       eye: ["local/model"],
-      hand: null,
-      reasoning: { eye: { "local/model": "high" }, hand: null },
+      hand: "local/hand",
+      reasoning: { eye: { "local/model": "high" }, hand: "low" },
     } as never;
   };
   await configure(ctx, path);
@@ -168,15 +172,49 @@ test("a config edit while the picker is open is not overwritten", async () => {
   assert.match(notices.join("\n"), /changed in another session/);
 });
 
-test("extension only registers the configuration command and rejects arguments", async () => {
+test("extension registers the command, warns at startup, and supplies role context", async () => {
   let command: Omit<RegisteredCommand, "name" | "sourceInfo"> | undefined;
-  extension({
-    registerCommand: (name, options) => {
-      assert.equal(name, "subagent-models");
-      command = options;
-    },
-  } as ExtensionAPI);
+  const handlers = new Map<string, (...args: never[]) => unknown>();
+  extension(
+    {
+      on: (name: string, handler: (...args: never[]) => unknown) => {
+        handlers.set(name, handler);
+      },
+      registerCommand: (name: string, options: Omit<RegisteredCommand, "name" | "sourceInfo">) => {
+        assert.equal(name, "subagent-models");
+        command = options;
+      },
+    } as unknown as ExtensionAPI,
+    path,
+  );
   assert.ok(command);
+  handlers.get("session_start")?.({} as never, { ...ctx, hasUI: true } as never);
+  assert.match(notices.join("\n"), /not configured.*eye, hand missing/);
+
+  const prompt = { systemPromptOptions: { selectedTools: ["subagent"], sections: {} } };
+  handlers.get("before_agent_start")?.(prompt as never, ctx as never);
+  assert.match(
+    (prompt.systemPromptOptions.sections as Record<string, string>).subagent_models,
+    /role-based dispatch will fail/,
+  );
+
+  writeFileSync(
+    path,
+    JSON.stringify({
+      eye: ["test/eye"],
+      hand: "test/hand",
+      reasoning: { eye: { "test/eye": "high" }, hand: "low" },
+    }),
+  );
+  const configuredPrompt = {
+    systemPromptOptions: { selectedTools: ["subagent"], sections: {} },
+  };
+  handlers.get("before_agent_start")?.(configuredPrompt as never, ctx as never);
+  assert.match(
+    (configuredPrompt.systemPromptOptions.sections as Record<string, string>).subagent_models,
+    /1\. test\/eye @ high.*Hand: test\/hand @ low/,
+  );
+
   await command.handler("unexpected", ctx);
   assert.match(notices.join("\n"), /Usage: \/subagent-models/);
   assert.deepEqual(events, []);

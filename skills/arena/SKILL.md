@@ -25,7 +25,7 @@ The N candidates will receive the same prompt, so the prompt is the contract.
 
 1. State the artifact each candidate is producing.
 2. Derive the rubric. State what success looks like for *this* task, then turn it into 3-6 concrete gradeable criteria. The rubric is the picker's tool in Phase D. Candidates only see the task.
-3. Pick runners from models actually available in Pi (`pi --list-models`). Prefer different provider families for judgment-heavy tasks; use the active model when no alternatives exist. Same model N times is fine when generation matters more than model diversity. Record the actual model for every seat.
+3. Fill runner seats from the configured eyes in priority order, using `role: "eye"`; the system prompt lists the pool. If N exceeds that pool, choose explicit overflow models from those actually available in Pi (`pi --list-models`) using the existing judgment: prefer different provider families for judgment-heavy tasks and the active model when no alternatives exist. Same model N times is fine when generation matters more than model diversity. Record the actual model for every seat; repeated routes are not model diversity.
 4. Assign output paths. The parent prepares distinct workspaces *before* dispatch: temporary directories for design artifacts, separate Jujutsu workspaces or Git worktrees for code changes. Give each candidate its own `cwd` and output path. Read [separate-before-serializing-shared-state](../principles/principle-separate-before-serializing-shared-state.md). Parallel writers must not share a working tree.
 
 ## Phase B: Fan out
@@ -38,7 +38,7 @@ If a candidate fails to produce output, proceed with N-1 and note the dropout in
 
 ## Phase C: Cross-judge
 
-After all candidates finish, choose an available model, preferably from a different family from the parent. Run one read-only `subagent` judge (default tools). Provide the rubric and all candidate paths by label. The judge scores each criterion and recommends a base with rationale. The parent reads the candidates too; never judge artifacts while writers are still running. If an independent model is unavailable, say so.
+After all candidates finish, choose a configured eye, preferring one from a different family from the parent, and use its `eyeIndex`. Do not reserve an unused eye for judging: the judge may have also produced a candidate, and that is not independent judgment of its own candidate. Run one read-only `subagent` judge (default tools). Provide the rubric and all candidate paths by label. The judge scores each criterion and recommends a base with rationale. The parent reads the candidates too; never judge artifacts while writers are still running. If an independent model is unavailable, say so.
 
 ## Phase D: Pick a base
 

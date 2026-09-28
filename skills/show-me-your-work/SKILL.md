@@ -64,7 +64,7 @@ Correct the log, not the story. The audit never edits or removes a row, even an 
 
 ## Cross-model review of the trail
 
-Before handing back, use Pinnacle's `subagent` tool with an available different model family (`pi --list-models`) to review the trail, artifacts, and this run's transcript if available. Give the child the exact paths and question; default read-only tools suffice. If no different family or transcript is available, state that limitation instead of claiming an independent review. Not a redo of the work: scan for what's suboptimal or risky.
+Before handing back, use Pinnacle's `subagent` tool with a configured eye, preferring one from a different model family from the parent, to review the trail, artifacts, and this run's transcript if available. Select it with `role: "eye"` and `eyeIndex` when it is not the first eye. Give the child the exact paths and question; default read-only tools suffice. If no different family or transcript is available, state that limitation instead of claiming an independent review. Not a redo of the work: scan for what's suboptimal or risky.
 
 - Decisions logged with weak or absent evidence.
 - Verification steps skipped or claimed without proof in the transcript.

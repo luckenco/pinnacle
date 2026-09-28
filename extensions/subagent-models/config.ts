@@ -17,6 +17,13 @@ export type SubagentModels = {
   reasoning: { eye: Record<string, ModelThinkingLevel>; hand: ModelThinkingLevel | null };
 };
 
+export function missingAssignments(config: SubagentModels): ("eye" | "hand")[] {
+  const missing: ("eye" | "hand")[] = [];
+  if (config.eye.length === 0) missing.push("eye");
+  if (config.hand === null) missing.push("hand");
+  return missing;
+}
+
 const levels = new Set<ModelThinkingLevel>([
   "off",
   "minimal",
@@ -91,6 +98,12 @@ export function loadConfig(path: string): { config: SubagentModels; raw: string 
 }
 
 export function saveConfig(path: string, baseline: string | null, config: SubagentModels): void {
+  const missing = missingAssignments(config);
+  if (missing.length) {
+    throw new Error(
+      `Subagent models require at least one eye and one hand (${missing.join(", ")} missing)`,
+    );
+  }
   mkdirSync(dirname(path), { recursive: true });
   const lockPath = `${path}.lock`;
   let lock: number;

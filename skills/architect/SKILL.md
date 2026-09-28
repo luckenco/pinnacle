@@ -28,7 +28,7 @@ Skip Phase A only when the work is genuinely greenfield with no surrounding syst
 
 ## Phase B: Sketch
 
-Read and apply [`arena`](../arena/SKILL.md) with the design-sketch task and the Phase A grounding artifacts. Give each runner a self-contained brief naming `references/runner-prompt.md` and `references/rationale-template.md`, with its own prepared workspace/output path. Each candidate produces a design package shaped per the template. Select actual Pi models from `pi --list-models` using arena's diversity rules; don't assume a particular provider is installed.
+Read and apply [`arena`](../arena/SKILL.md) with the design-sketch task and the Phase A grounding artifacts. Give each runner a self-contained brief naming `references/runner-prompt.md` and `references/rationale-template.md`, with its own prepared workspace/output path. Each candidate produces a design package shaped per the template. Use arena's configured-eye and overflow rules.
 
 Design it twice. Require at least two structurally distinct candidates before synthesis, even when the first looks sufficient. This is [exhaust-the-design-space](../principles/principle-exhaust-the-design-space.md) made concrete. Whole-shape alternatives, not point fixes inside one shape.
 

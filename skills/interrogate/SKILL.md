@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Interrogate
 
-Spawn one reviewer per configured model to adversarially review code changes. Each model gets the same prompt and rubric. The adversarial signal comes from model diversity, not assigned personas.
+Spawn 2–3 reviewers to adversarially review code changes. Each gets the same prompt and rubric. The adversarial signal comes from model diversity, not assigned personas.
 
 The deliverable is a synthesized verdict. Do NOT auto-apply changes.
 
@@ -33,7 +33,7 @@ Write one clear paragraph. If you're unsure about the intent, ask the user befor
 
 ## Step 3, Spawn Reviewers
 
-Launch 2–3 reviewers in one parallel `subagent` call using read-only default tools. Choose available Pi provider/model IDs (`pi --list-models`), preferably different families. If only one model is available, run independent reviewers on that model and state that model diversity was unavailable. Give each a self-contained brief containing the intent, review target paths or diff, and the reference paths below. Record the actual model and any failed reviewers; a dropout is not an empty review.
+Launch 2–3 reviewers in one parallel `subagent` call using read-only default tools. Fill seats from configured eyes in priority order with `role: "eye"`. If the reviewer count exceeds the eye pool, choose explicit overflow models from `pi --list-models`, preferably from different families. If only one model is available, run independent reviewers on that model and state that model diversity was unavailable. Give each a self-contained brief containing the intent, review target paths or diff, and the reference paths below. Record the actual model and any failed reviewers; a dropout is not an empty review.
 
 Read `references/reviewer-prompt.md` and fill in the template with:
 1. The stated intent

@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 Explore the codebase to answer "how does X work?" questions. Produce architectural explanations at the level of a senior engineer onboarding onto a subsystem, enough to build a working mental model, not so much that it reads like annotated source code.
 
-Use Pinnacle's `subagent` tool. Omit `model` to inherit the active Pi model; choose an available model from `pi --list-models` when the user requests one. Each task is self-contained and names the question, paths, and its reference prompt. Use the default read-only tools.
+Use Pinnacle's `subagent` tool. Exploration and explanation tasks use configured eyes and their saved reasoning. Fill parallel seats from the eyes in priority order with `role: "eye"`; when a fan-out exceeds the pool, choose whether each overflow seat inherits the parent or uses an explicit available model. Each task is self-contained and names the question, paths, and its reference prompt. Use the default read-only tools.
 
 ## Step 1. Assess Complexity
 
@@ -25,11 +25,11 @@ Decompose the question into 2 to 4 exploration angles, each a distinct slice of 
 
 ## Step 2b. Direct Explain (simple questions)
 
-Run one `subagent` task to explore and explain in one pass. Use `references/explainer-prompt.md` without the explorer-findings section. Go to Step 4.
+Run one `subagent` task with `role: "eye"` to explore and explain in one pass. Use `references/explainer-prompt.md` without the explorer-findings section. Go to Step 4.
 
 ## Step 3. Synthesize (complex questions only)
 
-Once all explorers have returned, run one `subagent` task to synthesize their findings into one explanation. Build its prompt from `references/explainer-prompt.md` with every explorer's findings filled in. Report any failed explorer as a coverage gap, not a successful trace.
+Once all explorers have returned, run one `subagent` task with `role: "eye"` to synthesize their findings into one explanation. Build its prompt from `references/explainer-prompt.md` with every explorer's findings filled in. Report any failed explorer as a coverage gap, not a successful trace.
 
 ## Step 4. Present
 

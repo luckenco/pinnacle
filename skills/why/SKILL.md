@@ -10,7 +10,7 @@ Investigate the motivation and intent behind code.
 
 Companion to the `how` skill. `how` answers what the code does and how it works. `why` answers what forces led to its shape.
 
-Use Pinnacle's `subagent` tool. Each child has a fresh conversation: supply the question, code anchor, source playbook, and the exact reference paths to read. Omit `model` to inherit the active Pi model, or choose an installed provider/model ID. Investigators should not write to the repository or remote services.
+Use Pinnacle's `subagent` tool. Each child has a fresh conversation: supply the question, code anchor, source playbook, and the exact reference paths to read. Investigators and the synthesizer use configured eyes and their saved reasoning. Investigators should not write to the repository or remote services.
 
 ## Operating Posture
 
@@ -77,7 +77,7 @@ Source control is available locally through `jj` or `git`; use `gh` only when au
 
 Aim for a complete **coverage map**, not a minimal one. Document the null, don't skip the search.
 
-Launch all matching investigators in one parallel `subagent` call (up to eight tasks, four concurrent). Don't ask one agent to cover multiple MCPs. Give source-control investigators `tools: ["read", "grep", "find", "ls", "bash"]`. Give MCP investigators `tools: ["read", "grep", "find", "ls", "mcp"]` if the Pi child exposes the gateway; otherwise investigate those sources in the parent and record the limitation. No write tools for any investigator.
+Launch all matching investigators in one parallel `subagent` call (up to eight tasks, four concurrent). Fill seats from configured eyes in priority order with `role: "eye"`; when investigators outnumber eyes, choose whether each overflow seat inherits the parent or uses an explicit available model. Don't ask one agent to cover multiple MCPs. Give source-control investigators `tools: ["read", "grep", "find", "ls", "bash"]`. Give MCP investigators `tools: ["read", "grep", "find", "ls", "mcp"]` if the Pi child exposes the gateway; otherwise investigate those sources in the parent and record the limitation. No write tools for any investigator.
 
 Each investigator gets:
 1. The base prompt from `references/investigator-prompt.md`
@@ -119,7 +119,7 @@ If your scope assessment suggests a single-commit trivial target where the PR de
 
 Spawn one synthesizer subagent:
 
-- Run one `subagent` task, with the same source-specific read-only tool access used by investigators when spot-verification requires it. If MCP access is unavailable to the child, spot-verify citations in the parent before presenting them.
+- Run one `subagent` task with `role: "eye"`, with the same source-specific read-only tool access used by investigators when spot-verification requires it. If MCP access is unavailable to the child, spot-verify citations in the parent before presenting them.
 
 The synthesizer gets:
 1. The investigator findings, including any null results and any categories skipped with justification

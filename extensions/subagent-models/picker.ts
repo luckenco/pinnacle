@@ -15,7 +15,7 @@ import {
   type TUI,
   truncateToWidth,
 } from "@earendil-works/pi-tui";
-import type { SubagentModels } from "./config";
+import { missingAssignments, type SubagentModels } from "./config";
 
 export class ModelPicker implements Component, Focusable {
   private input = new Input({ placeholder: "Search provider, model ID, or name" });
@@ -26,6 +26,7 @@ export class ModelPicker implements Component, Focusable {
   private ids: string[];
   private rows: string[] = [];
   private cursor = 0;
+  private saveWarning: string | null = null;
   private editing: {
     id: string;
     choices: (ModelThinkingLevel | "remove")[];
@@ -123,6 +124,7 @@ export class ModelPicker implements Component, Focusable {
       this.draft.reasoning.hand = choice;
     }
     this.editing = null;
+    this.saveWarning = null;
     this.input.focused = this._focused;
     this.refresh(editing.id);
   }
@@ -146,6 +148,11 @@ export class ModelPicker implements Component, Focusable {
       return;
     }
     if (this.keys.matches(data, "app.models.save")) {
+      const missing = missingAssignments(this.draft);
+      if (missing.length) {
+        this.saveWarning = `Cannot save · ${missing.join(" and ")} required`;
+        return;
+      }
       this.done({
         eye: [...this.draft.eye],
         hand: this.draft.hand,
@@ -234,8 +241,11 @@ export class ModelPicker implements Component, Focusable {
     const compact = height < 18;
     const pageSize = this.pageSize;
     const unavailable = this.catalogUnavailable ? " · catalog unavailable" : "";
+    const title = `Subagent models · ${this.mode.toUpperCase()}${unavailable}`;
     const lines = [
-      theme.fg("accent", theme.bold(`Subagent models · ${this.mode.toUpperCase()}${unavailable}`)),
+      this.saveWarning
+        ? theme.fg("warning", theme.bold(`${title} · ${this.saveWarning}`))
+        : theme.fg("accent", theme.bold(title)),
     ];
     if (!compact) {
       lines.push(
@@ -243,7 +253,7 @@ export class ModelPicker implements Component, Focusable {
           "muted",
           this.catalogUnavailable
             ? "Model list unavailable; remove/reorder only."
-            : "Global preferences only; subagent routing is unchanged.",
+            : "Configured roles drive subagent model and reasoning selection.",
         ),
         `Eye: ${draft.eye.length} · Primary: ${draft.eye[0] ?? "unset"}`,
         `Hand: ${draft.hand ?? "unset"}`,
