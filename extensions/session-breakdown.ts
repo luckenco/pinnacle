@@ -2,7 +2,7 @@
  * /session-breakdown
  *
  * Interactive TUI that analyzes ~/.pi/agent/sessions (recursively, *.jsonl) and shows
- * last 7/30/90 days of:
+ * last 7/30/90 days or 1 year (365 days) of:
  * - sessions/day
  * - messages/day
  * - tokens/day (if available)
@@ -87,7 +87,8 @@ interface BreakdownData {
 }
 
 const SESSION_ROOT = path.join(os.homedir(), ".pi", "agent", "sessions");
-const RANGE_DAYS = [7, 30, 90] as const;
+const RANGE_DAYS = [7, 30, 90, 365] as const;
+const MAX_RANGE_DAYS = Math.max(...RANGE_DAYS);
 
 type MeasurementMode = "sessions" | "messages" | "tokens";
 
@@ -771,8 +772,7 @@ async function computeBreakdown(
   const now = new Date();
   const ranges = new Map<number, RangeAgg>();
   for (const d of RANGE_DAYS) ranges.set(d, buildRangeAgg(d, now));
-  const range90 = ranges.get(90)!;
-  const start90 = range90.days[0].date;
+  const start = ranges.get(MAX_RANGE_DAYS)!.days[0].date;
 
   onProgress?.({
     phase: "scan",
@@ -781,7 +781,7 @@ async function computeBreakdown(
     totalFiles: 0,
   });
 
-  const candidates = await walkSessionFiles(SESSION_ROOT, start90, signal, (found) => {
+  const candidates = await walkSessionFiles(SESSION_ROOT, start, signal, (found) => {
     onProgress?.({ phase: "scan", foundFiles: found });
   });
 
@@ -867,7 +867,7 @@ class BreakdownComponent implements Component {
       nextIndex = this.rangeIndex - 1;
     } else if (matchesKey(data, Key.right) || data.toLowerCase() === "l") {
       nextIndex = this.rangeIndex + 1;
-    } else if (data === "1" || data === "2" || data === "3") {
+    } else if (data === "1" || data === "2" || data === "3" || data === "4") {
       nextIndex = Number(data) - 1;
     }
     if (nextIndex === undefined) return;
@@ -886,7 +886,8 @@ class BreakdownComponent implements Component {
 
     const tab = (days: number, idx: number): string => {
       const selected = idx === this.rangeIndex;
-      const label = `${days}d`;
+      let label = `${days}d`;
+      if (days === 365) label = "1y";
       return selected ? bold(`[${label}]`) : dim(` ${label} `);
     };
 
@@ -896,7 +897,7 @@ class BreakdownComponent implements Component {
     };
 
     const header =
-      `${bold("Session breakdown")}  ${tab(7, 0)} ${tab(30, 1)} ${tab(90, 2)}  ` +
+      `${bold("Session breakdown")}  ${RANGE_DAYS.map(tab).join(" ")}  ` +
       `${metricTab("sessions", "sess")} ${metricTab("messages", "msg")} ${metricTab("tokens", "tok")}`;
 
     const legendItems = renderLegendItems(
@@ -911,9 +912,10 @@ class BreakdownComponent implements Component {
     const maxScale = 4 - this.rangeIndex;
     const weeks = weeksForRange(range);
     const leftMargin = 4; // "Mon " (or 4 spaces)
-    const gap = 1;
     const graphArea = Math.max(1, width - leftMargin);
-    // Each week column uses: cellWidth + gap. Last column also gets gap (fine; we truncate anyway).
+    let gap = 1;
+    if (weeks * 2 - 1 > graphArea) gap = 0;
+    // Each week column uses cellWidth + gap, except the last has no gap.
     const idealCellWidth = Math.floor((graphArea + gap) / Math.max(1, weeks)) - gap;
     const cellWidth = Math.min(maxScale, Math.max(1, idealCellWidth));
 
@@ -984,7 +986,7 @@ class BreakdownComponent implements Component {
 export default function sessionBreakdownExtension(pi: ExtensionAPI) {
   pi.registerCommand("session-breakdown", {
     description:
-      "Interactive breakdown of last 7/30/90 days of ~/.pi session usage (sessions/messages/tokens + cost by model)",
+      "Interactive breakdown of last 7/30/90 days or 1 year of ~/.pi session usage (sessions/messages/tokens + cost by model)",
     handler: async (_args, ctx: ExtensionContext) => {
       if (ctx.mode !== "tui") {
         // Non-interactive fallback.
@@ -1003,7 +1005,7 @@ export default function sessionBreakdownExtension(pi: ExtensionAPI) {
 
       let aborted = false;
       const data = await ctx.ui.custom<BreakdownData | null>((tui, theme, _kb, done) => {
-        const baseMessage = "Analyzing sessions (last 90 days)…";
+        const baseMessage = `Analyzing sessions (last ${MAX_RANGE_DAYS} days)…`;
         const loader = new BorderedLoader(tui, theme, baseMessage);
 
         const startedAt = Date.now();
