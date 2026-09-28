@@ -15,7 +15,8 @@ export default function piSkillToggle(pi: ExtensionAPI, agentDir = getAgentDir()
         state.overrides,
       );
     } catch (error) {
-      ctx.ui.notify(`Pi Skill Toggle: ${message(error)}`, "warning");
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.ui.notify(`Pi Skill Toggle: ${message}`, "warning");
     }
   });
 
@@ -25,8 +26,4 @@ export default function piSkillToggle(pi: ExtensionAPI, agentDir = getAgentDir()
       await runToggleSkillsCommand(ctx, store);
     },
   });
-}
-
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

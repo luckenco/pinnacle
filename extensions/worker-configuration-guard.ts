@@ -9,8 +9,12 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { Value } from "typebox/value";
 
 const PROTECTED_FILE = "worker-configuration.d.ts";
+
+const pathInputSchema = Type.Object({ path: Type.String() });
 
 const BLOCK_REASON =
   `BLOCKED: ${PROTECTED_FILE} is generated and must not be manually ` +
@@ -19,26 +23,32 @@ const BLOCK_REASON =
   "regenerate it instead.";
 
 const PROTECTED_FILE_RE = /(?:^|[^\w.-])worker-configuration\.d\.ts(?:$|[^\w.-])/;
+
 const OUTPUT_REDIRECTION_RE = /(^|[^<=>-])>>?/;
+
 const BASH_MUTATION_RE =
   /\b(?:tee|touch|cp|mv|rm|install|truncate|dd|rsync|python|python3|node|deno|ruby|bun|tsx|ts-node)\b|\b(?:sed|perl)\b[^\n]*(?:-i|--in-place)\b|\bgit\s+(?:checkout|restore|reset)\b/;
+
 const SHELL_META_RE = /[;&|<>`]/;
+
 const WRANGLER_TYPES_ONLY_RE =
   /^\s*(?:(?:env|export)\s+[^\s]+\s+)*((?:\.\/node_modules\/\.bin\/)?wrangler|(?:npx|bunx)\s+wrangler|(?:npm|pnpm|yarn|bun)\s+(?:exec\s+|dlx\s+)?wrangler)\s+types(?:\s+[^;&|<>`]*)?\s*$/;
 
-function isProtectedPath(path: unknown): boolean {
-  if (typeof path !== "string") return false;
+function isProtectedPath(path: string): boolean {
   const normalized = path.replace(/^@/, "").replaceAll("\\", "/");
+
   return normalized.split("/").at(-1) === PROTECTED_FILE;
 }
 
 function isWranglerTypesOnly(command: string): boolean {
   const normalized = command.replace(/\\\n/g, " ").trim();
+
   return !SHELL_META_RE.test(normalized) && WRANGLER_TYPES_ONLY_RE.test(normalized);
 }
 
 function appearsToModifyProtectedFile(command: string): boolean {
   if (!PROTECTED_FILE_RE.test(command) || isWranglerTypesOnly(command)) return false;
+
   return OUTPUT_REDIRECTION_RE.test(command) || BASH_MUTATION_RE.test(command);
 }
 
@@ -46,14 +56,18 @@ export default function (pi: ExtensionAPI) {
   pi.on("tool_call", (event, ctx) => {
     const changesFile =
       (isToolCallEventType("write", event) || isToolCallEventType("edit", event)) &&
+      Value.Check(pathInputSchema, event.input) &&
       isProtectedPath(event.input.path);
+
     const changesViaShell =
       isToolCallEventType("bash", event) && appearsToModifyProtectedFile(event.input.command);
+
     if (!changesFile && !changesViaShell) return;
 
     if (ctx.hasUI) {
       ctx.ui.notify(`Blocked manual change to ${PROTECTED_FILE}; run wrangler types.`, "warning");
     }
+
     return { block: true, reason: BLOCK_REASON };
   });
 }

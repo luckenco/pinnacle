@@ -3,13 +3,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import type { ExtensionAPI, Skill } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionFactory, Skill } from "@earendil-works/pi-coding-agent";
 import extension from "./index";
 import { SkillToggleStore } from "./state";
 
 const root = await fs.realpath(await fs.mkdtemp(join(os.tmpdir(), "pinnacle-skill-toggle-index-")));
+
 const repository = join(root, "repository");
+
 const agentDir = join(root, "agent");
+
 await fs.mkdir(join(repository, ".git"), { recursive: true });
 
 after(async () => {
@@ -17,25 +20,29 @@ after(async () => {
 });
 
 test("registers the command and applies repository overrides before a model turn", async () => {
-  let beforeAgentStart:
-    | ((
-        event: { systemPromptOptions: { skills: Skill[] } },
-        ctx: { cwd: string; ui: { notify(): void } },
-      ) => Promise<void>)
-    | undefined;
+  type StartHandler = (
+    event: { systemPromptOptions: { skills: Skill[] } },
+    ctx: { cwd: string; ui: { notify: (message: string, level: "warning") => void } },
+  ) => Promise<void>;
+
+  let beforeAgentStart: StartHandler | undefined;
   let commandName = "";
-  extension(
-    {
-      on: (name: string, handler: unknown) => {
-        if (name === "before_agent_start") beforeAgentStart = handler as typeof beforeAgentStart;
-        return () => {};
-      },
-      registerCommand: (name: string) => {
-        commandName = name;
-      },
-    } as unknown as ExtensionAPI,
-    agentDir,
-  );
+
+  const pi = {
+    on: (_name: "before_agent_start", handler: StartHandler) => {
+      beforeAgentStart = handler;
+
+      return () => {};
+    },
+    registerCommand: (name: string) => {
+      commandName = name;
+    },
+  };
+
+  const factory = extension satisfies ExtensionFactory;
+  const api: Pick<ExtensionAPI, "registerCommand"> = pi;
+  // SAFETY: this test exercises only the before_agent_start and registerCommand API methods.
+  factory(api as ExtensionAPI, agentDir);
 
   const store = new SkillToggleStore(agentDir);
   await store.update(repository, (state) => ({ ...state, overrides: { github: false } }));
@@ -51,6 +58,7 @@ test("registers the command and applies repository overrides before a model turn
 
 function skill(name: string): Skill {
   const filePath = `/skills/${name}/SKILL.md`;
+
   return {
     name,
     description: `${name} description`,

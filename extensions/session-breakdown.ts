@@ -22,9 +22,12 @@ import path from "node:path";
 import readline from "node:readline";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader } from "@earendil-works/pi-coding-agent";
+import { type Static, Type } from "typebox";
+import { Value } from "typebox/value";
 import {
   type Component,
   Key,
+  Loader,
   matchesKey,
   type TUI,
   truncateToWidth,
@@ -82,10 +85,17 @@ interface BreakdownData {
 }
 
 const SESSION_ROOT = path.join(os.homedir(), ".pi", "agent", "sessions");
+
 const RANGE_DAYS = [7, 30, 90, 365] as const;
+
 const MAX_RANGE_DAYS = Math.max(...RANGE_DAYS);
 
 type MeasurementMode = "sessions" | "messages" | "tokens" | "cost";
+
+interface GraphMetric {
+  kind: MeasurementMode;
+  denom: number;
+}
 
 type BreakdownProgressPhase = "scan" | "parse" | "finalize";
 
@@ -96,17 +106,40 @@ interface BreakdownProgressState {
   totalFiles: number;
 }
 
-function setBorderedLoaderMessage(loader: BorderedLoader, message: string) {
-  // BorderedLoader wraps a (Cancellable)Loader which supports setMessage(),
-  // but it doesn't expose it publicly. Access the inner loader for progress updates.
-  const inner = (loader as any).loader; // eslint-disable-line @typescript-eslint/no-explicit-any
-  if (inner && typeof inner.setMessage === "function") {
-    inner.setMessage(message);
-  }
-}
+// Session entries vary by version. Only require a JSON object here; validate
+// individual fields where they are consumed so malformed optional data is ignored.
+const fieldsSchema = Type.Object({
+  type: Type.Optional(Type.Unknown()),
+  timestamp: Type.Optional(Type.Unknown()),
+  provider: Type.Optional(Type.Unknown()),
+  model: Type.Optional(Type.Unknown()),
+  modelId: Type.Optional(Type.Unknown()),
+  message: Type.Optional(Type.Unknown()),
+  usage: Type.Optional(Type.Unknown()),
+  cost: Type.Optional(Type.Unknown()),
+  total: Type.Optional(Type.Unknown()),
+  totalTokens: Type.Optional(Type.Unknown()),
+  total_tokens: Type.Optional(Type.Unknown()),
+  tokens: Type.Optional(Type.Unknown()),
+  tokenCount: Type.Optional(Type.Unknown()),
+  token_count: Type.Optional(Type.Unknown()),
+  promptTokens: Type.Optional(Type.Unknown()),
+  prompt_tokens: Type.Optional(Type.Unknown()),
+  inputTokens: Type.Optional(Type.Unknown()),
+  input_tokens: Type.Optional(Type.Unknown()),
+  completionTokens: Type.Optional(Type.Unknown()),
+  completion_tokens: Type.Optional(Type.Unknown()),
+  outputTokens: Type.Optional(Type.Unknown()),
+  output_tokens: Type.Optional(Type.Unknown()),
+});
+
+const stringSchema = Type.String();
+
+const numericSchema = Type.Union([Type.Number(), Type.String()]);
 
 // Dark-ish background and empty cell color (close to GitHub dark)
 const DEFAULT_BG: RGB = { r: 13, g: 17, b: 23 };
+
 const EMPTY_CELL_BG: RGB = { r: 22, g: 27, b: 34 };
 
 // Default palette (assigned to top models)
@@ -139,6 +172,7 @@ function weightedMix(colors: Array<{ color: RGB; weight: number }>): RGB {
   let r = 0;
   let g = 0;
   let b = 0;
+
   for (const c of colors) {
     if (!Number.isFinite(c.weight) || c.weight <= 0) continue;
     total += c.weight;
@@ -146,7 +180,9 @@ function weightedMix(colors: Array<{ color: RGB; weight: number }>): RGB {
     g += c.color.g * c.weight;
     b += c.color.b * c.weight;
   }
+
   if (total <= 0) return EMPTY_CELL_BG;
+
   return { r: Math.round(r / total), g: Math.round(g / total), b: Math.round(b / total) };
 }
 
@@ -164,26 +200,35 @@ function bold(text: string): string {
 
 function formatCount(n: number): string {
   if (!Number.isFinite(n) || n === 0) return "0";
+
   if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+
   if (n >= 10_000) return `${(n / 1_000).toFixed(1)}K`;
+
   return n.toLocaleString("en-US");
 }
 
 function formatUsd(cost: number): string {
   if (!Number.isFinite(cost)) return "$0.00";
+
   if (cost >= 1) return `$${cost.toFixed(2)}`;
+
   if (cost >= 0.1) return `$${cost.toFixed(3)}`;
+
   return `$${cost.toFixed(4)}`;
 }
 
 function padRight(s: string, n: number): string {
   const delta = n - s.length;
+
   return delta > 0 ? s + " ".repeat(delta) : s;
 }
 
 function padLeft(s: string, n: number): string {
   const delta = n - s.length;
+
   return delta > 0 ? " ".repeat(delta) + s : s;
 }
 
@@ -191,6 +236,7 @@ function toLocalDayKey(d: Date): string {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
+
   return `${yyyy}-${mm}-${dd}`;
 }
 
@@ -201,13 +247,16 @@ function localMidnight(d: Date): Date {
 function addDaysLocal(d: Date, days: number): Date {
   const x = new Date(d);
   x.setDate(x.getDate() + days);
+
   return x;
 }
 
 function countDaysInclusiveLocal(start: Date, end: Date): number {
   // Avoid ms-based day math because DST transitions can make a “day” 23/25h in local time.
   let n = 0;
+
   for (let d = new Date(start); d <= end; d = addDaysLocal(d, 1)) n++;
+
   return n;
 }
 
@@ -216,57 +265,69 @@ function mondayIndex(date: Date): number {
   return (date.getDay() + 6) % 7;
 }
 
-function modelKeyFromParts(provider?: unknown, model?: unknown): ModelKey | null {
-  const p = typeof provider === "string" ? provider.trim() : "";
-  const m = typeof model === "string" ? model.trim() : "";
+function modelKeyFromParts(provider?: string, model?: string): ModelKey | null {
+  const p = provider?.trim() ?? "";
+  const m = model?.trim() ?? "";
+
   if (!p && !m) return null;
+
   if (!p) return m;
+
   if (!m) return p;
+
   return `${p}/${m}`;
 }
 
 function parseSessionStartFromFilename(name: string): Date | null {
   // Example: 2026-02-02T21-52-28-774Z_<uuid>.jsonl
   const m = name.match(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z_/);
+
   if (!m) return null;
   const iso = `${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5]}Z`;
   const d = new Date(iso);
+
   return Number.isFinite(d.getTime()) ? d : null;
 }
 
-function extractProviderModelAndUsage(obj: any): {
-  provider?: any;
-  model?: any;
-  modelId?: any;
-  usage?: any;
-} {
+function extractProviderModelAndUsage(obj: Static<typeof fieldsSchema>) {
   // Session format varies across versions.
   // - Newer: { provider, model, usage } on the message wrapper
   // - Older: { message: { provider, model, usage } }
-  const msg = obj?.message;
+  const msg = Value.Check(fieldsSchema, obj.message) ? obj.message : null;
+  const provider = obj.provider ?? msg?.provider;
+  const model = obj.model ?? msg?.model;
+  const modelId = obj.modelId ?? msg?.modelId;
+  const usage = obj.usage ?? msg?.usage;
+
   return {
-    provider: obj?.provider ?? msg?.provider,
-    model: obj?.model ?? msg?.model,
-    modelId: obj?.modelId ?? msg?.modelId,
-    usage: obj?.usage ?? msg?.usage,
+    provider: Value.Check(stringSchema, provider) ? provider : undefined,
+    model: Value.Check(stringSchema, model) ? model : undefined,
+    modelId: Value.Check(stringSchema, modelId) ? modelId : undefined,
+    usage: Value.Check(fieldsSchema, usage) ? usage : null,
   };
 }
 
 function firstNumber(...values: unknown[]): number {
   for (const value of values) {
-    if (typeof value !== "number" && typeof value !== "string") continue;
+    if (!Value.Check(numericSchema, value)) continue;
     const number = Number(value);
+
     if (Number.isFinite(number) && number > 0) return number;
   }
+
   return 0;
 }
 
-function extractCostTotal(usage: any): number {
-  return firstNumber(usage?.cost, usage?.cost?.total);
+function extractCostTotal(usage: Static<typeof fieldsSchema> | null): number {
+  const costFields = Value.Check(fieldsSchema, usage?.cost) ? usage.cost : null;
+
+  return firstNumber(usage?.cost, costFields?.total);
 }
 
-function extractTokensTotal(usage: any): number {
+function extractTokensTotal(usage: Static<typeof fieldsSchema> | null): number {
   if (!usage) return 0;
+
+  const tokenFields = Value.Check(fieldsSchema, usage.tokens) ? usage.tokens : null;
 
   const total = firstNumber(
     usage.totalTokens,
@@ -274,10 +335,11 @@ function extractTokensTotal(usage: any): number {
     usage.tokens,
     usage.tokenCount,
     usage.token_count,
-    usage.tokens?.total,
-    usage.tokens?.totalTokens,
-    usage.tokens?.total_tokens,
+    tokenFields?.total,
+    tokenFields?.totalTokens,
+    tokenFields?.total_tokens,
   );
+
   if (total) return total;
 
   return (
@@ -299,10 +361,12 @@ async function walkSessionFiles(
 ): Promise<string[]> {
   const out: string[] = [];
   const stack: string[] = [root];
+
   while (stack.length) {
     if (signal?.aborted) break;
     const dir = stack.pop()!;
     let entries: Dirent[] = [];
+
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
     } catch {
@@ -312,27 +376,34 @@ async function walkSessionFiles(
     for (const ent of entries) {
       if (signal?.aborted) break;
       const p = path.join(dir, ent.name);
+
       if (ent.isDirectory()) {
         stack.push(p);
         continue;
       }
+
       if (!ent.isFile() || !ent.name.endsWith(".jsonl")) continue;
 
       // Prefer filename timestamp, else fall back to mtime.
       const startedAt = parseSessionStartFromFilename(ent.name);
+
       if (startedAt) {
         if (localMidnight(startedAt) >= startCutoffLocal) {
           out.push(p);
+
           if (onFound && out.length % 10 === 0) onFound(out.length);
         }
+
         continue;
       }
 
       try {
         const st = await fs.stat(p);
         const approx = new Date(st.mtimeMs);
+
         if (localMidnight(approx) >= startCutoffLocal) {
           out.push(p);
+
           if (onFound && out.length % 10 === 0) onFound(out.length);
         }
       } catch {
@@ -340,7 +411,9 @@ async function walkSessionFiles(
       }
     }
   }
+
   onFound?.(out.length);
+
   return out;
 }
 
@@ -368,51 +441,68 @@ async function parseSessionFile(
       if (signal?.aborted) {
         rl.close();
         stream.destroy();
+
         return null;
       }
+
       if (!line) continue;
-      let obj: any;
+      let parsed: unknown;
+
       try {
-        obj = JSON.parse(line);
+        parsed = JSON.parse(line);
       } catch {
         continue;
       }
 
-      if (!startedAt && obj?.type === "session" && typeof obj?.timestamp === "string") {
+      if (!Value.Check(fieldsSchema, parsed)) continue;
+
+      const obj = parsed;
+
+      if (!startedAt && obj.type === "session" && Value.Check(stringSchema, obj.timestamp)) {
         const d = new Date(obj.timestamp);
+
         if (Number.isFinite(d.getTime())) startedAt = d;
         continue;
       }
 
       if (obj?.type === "model_change") {
-        const mk = modelKeyFromParts(obj.provider, obj.modelId);
+        const mk = modelKeyFromParts(
+          Value.Check(stringSchema, obj.provider) ? obj.provider : undefined,
+          Value.Check(stringSchema, obj.modelId) ? obj.modelId : undefined,
+        );
+
         if (mk) {
           currentModel = mk;
           modelsUsed.add(mk);
         }
+
         continue;
       }
 
       if (obj?.type !== "message") continue;
 
       const { provider, model, modelId, usage } = extractProviderModelAndUsage(obj);
+
       const mk =
         modelKeyFromParts(provider, model) ??
         modelKeyFromParts(provider, modelId) ??
         currentModel ??
         "unknown";
+
       modelsUsed.add(mk);
 
       messages += 1;
       messagesByModel.set(mk, (messagesByModel.get(mk) ?? 0) + 1);
 
       const tok = extractTokensTotal(usage);
+
       if (tok > 0) {
         tokens += tok;
         tokensByModel.set(mk, (tokensByModel.get(mk) ?? 0) + tok);
       }
 
       const cost = extractCostTotal(usage);
+
       if (cost > 0) {
         totalCost += cost;
         costByModel.set(mk, (costByModel.get(mk) ?? 0) + cost);
@@ -425,6 +515,7 @@ async function parseSessionFile(
 
   if (!startedAt) return null;
   const dayKeyLocal = toLocalDayKey(startedAt);
+
   return {
     startedAt,
     dayKeyLocal,
@@ -447,6 +538,7 @@ export function buildRangeAgg(days: number, now: Date): RangeAgg {
   for (let i = 0; i < days; i++) {
     const d = addDaysLocal(start, i);
     const dayKeyLocal = toLocalDayKey(d);
+
     const day: DayAgg = {
       date: d,
       dayKeyLocal,
@@ -459,6 +551,7 @@ export function buildRangeAgg(days: number, now: Date): RangeAgg {
       messagesByModel: new Map(),
       tokensByModel: new Map(),
     };
+
     outDays.push(day);
     dayByKey.set(dayKeyLocal, day);
   }
@@ -479,6 +572,7 @@ export function buildRangeAgg(days: number, now: Date): RangeAgg {
 
 function addSessionToRange(range: RangeAgg, session: ParsedSession): void {
   const day = range.dayByKey.get(session.dayKeyLocal);
+
   if (!day) return;
 
   range.sessions += 1;
@@ -519,27 +613,25 @@ function sortMapByValueDesc<K extends string>(m: Map<K, number>): Array<{ key: K
   return [...m.entries()].map(([key, value]) => ({ key, value })).sort((a, b) => b.value - a.value);
 }
 
-function choosePalette(
-  range: RangeAgg,
-  topN = 4,
-): {
-  modelColors: Map<ModelKey, RGB>;
-  otherColor: RGB;
-  orderedModels: ModelKey[];
-} {
+function choosePalette(range: RangeAgg, topN = 4) {
   // Prefer cost if any cost exists, else tokens, else messages, else sessions.
   const costSum = [...range.modelCost.values()].reduce((a, b) => a + b, 0);
   let popularity = range.modelSessions;
+
   if (range.totalMessages > 0) popularity = range.modelMessages;
+
   if (range.totalTokens > 0) popularity = range.modelTokens;
+
   if (costSum > 0) popularity = range.modelCost;
 
   const sorted = sortMapByValueDesc(popularity);
   const orderedModels = sorted.slice(0, topN).map((x) => x.key);
   const modelColors = new Map<ModelKey, RGB>();
+
   for (let i = 0; i < orderedModels.length; i++) {
     modelColors.set(orderedModels[i], PALETTE[i % PALETTE.length]);
   }
+
   return {
     modelColors,
     otherColor: { r: 160, g: 160, b: 160 },
@@ -557,34 +649,40 @@ function dayMixedColor(
   let otherWeight = 0;
 
   let map = day.sessionsByModel;
+
   if (mode === "messages" && day.messages > 0) map = day.messagesByModel;
+
   if (mode === "tokens") {
     if (day.messages > 0) map = day.messagesByModel;
+
     if (day.tokens > 0) map = day.tokensByModel;
   }
+
   if (mode === "cost" && day.totalCost > 0) map = day.costByModel;
 
   for (const [mk, w] of map.entries()) {
     const c = modelColors.get(mk);
+
     if (c) parts.push({ color: c, weight: w });
     else otherWeight += w;
   }
+
   if (otherWeight > 0) parts.push({ color: otherColor, weight: otherWeight });
+
   return weightedMix(parts);
 }
 
-function graphMetricForRange(
-  range: RangeAgg,
-  mode: MeasurementMode,
-): { kind: MeasurementMode; denom: number } {
+function graphMetricForRange(range: RangeAgg, mode: MeasurementMode): GraphMetric {
   if (mode === "cost") {
     const maxCost = Math.max(0, ...range.days.map((d) => d.totalCost));
+
     if (maxCost > 0) return { kind: "cost", denom: Math.log1p(maxCost) };
     mode = "tokens";
   }
 
   if (mode === "tokens") {
     const maxTokens = Math.max(0, ...range.days.map((d) => d.tokens));
+
     if (maxTokens > 0) return { kind: "tokens", denom: Math.log1p(maxTokens) };
     // fall back if tokens aren't available
     mode = "messages";
@@ -592,12 +690,14 @@ function graphMetricForRange(
 
   if (mode === "messages") {
     const maxMessages = Math.max(0, ...range.days.map((d) => d.messages));
+
     if (maxMessages > 0) return { kind: "messages", denom: Math.log1p(maxMessages) };
     // fall back if messages aren't available
     mode = "sessions";
   }
 
   const maxSessions = Math.max(0, ...range.days.map((d) => d.sessions));
+
   return { kind: "sessions", denom: Math.log1p(maxSessions) };
 }
 
@@ -608,6 +708,7 @@ function weeksForRange(range: RangeAgg): number {
   const gridStart = addDaysLocal(start, -mondayIndex(start));
   const gridEnd = addDaysLocal(end, 6 - mondayIndex(end));
   const totalGridDays = countDaysInclusiveLocal(gridStart, gridEnd);
+
   return Math.ceil(totalGridDays / 7);
 }
 
@@ -643,6 +744,7 @@ function renderGraphLines(
   ]);
 
   const lines: string[] = [];
+
   for (let row = 0; row < 7; row++) {
     const label = labelByRow.get(row);
     let line = label ? `${padRight(label, 3)} ` : "    ";
@@ -651,6 +753,7 @@ function renderGraphLines(
       const cellDate = addDaysLocal(gridStart, w * 7 + row);
       const inRange = cellDate >= start && cellDate <= end;
       const colGap = w < weeks - 1 ? gapStr : "";
+
       if (!inRange) {
         line += " ".repeat(cellWidth) + colGap;
         continue;
@@ -682,11 +785,13 @@ function renderGraphLines(
 
 function dayMetricValue(day: DayAgg, mode: MeasurementMode): number {
   if (mode === "cost") return day.totalCost;
+
   return day[mode];
 }
 
 function displayModelName(modelKey: string): string {
   const idx = modelKey.indexOf("/");
+
   return idx === -1 ? modelKey : modelKey.slice(idx + 1);
 }
 
@@ -696,12 +801,16 @@ function renderLegendItems(
   otherColor: RGB,
 ): string[] {
   const items: string[] = [];
+
   for (const mk of orderedModels) {
     const c = modelColors.get(mk);
+
     if (!c) continue;
     items.push(`${ansiFg(c, "█")} ${displayModelName(mk)}`);
   }
+
   items.push(`${ansiFg(otherColor, "█")} other`);
+
   return items;
 }
 
@@ -735,6 +844,7 @@ function renderModelTable(range: RangeAgg, mode: MeasurementMode, maxRows = 8): 
   const modelWidth = Math.min(52, Math.max("model".length, ...rows.map((r) => r.key.length)));
 
   const lines: string[] = [];
+
   if (kind === "cost") {
     lines.push(
       `${padRight("model", modelWidth)}  ${padLeft(label, valueWidth)}  ${padLeft("share", 6)}`,
@@ -754,10 +864,12 @@ function renderModelTable(range: RangeAgg, mode: MeasurementMode, maxRows = 8): 
     const share = total > 0 ? `${Math.round((value / total) * 100)}%` : "0%";
     const valueText = kind === "cost" ? formatUsd(value) : formatCount(value);
     const row = `${padRight(r.key.slice(0, modelWidth), modelWidth)}  ${padLeft(valueText, valueWidth)}`;
+
     if (kind === "cost") {
       lines.push(`${row}  ${padLeft(share, 6)}`);
       continue;
     }
+
     const cost = range.modelCost.get(r.key) ?? 0;
     lines.push(`${row}  ${padLeft(formatUsd(cost), 10)}  ${padLeft(share, 6)}`);
   }
@@ -771,6 +883,7 @@ function renderModelTable(range: RangeAgg, mode: MeasurementMode, maxRows = 8): 
 
 function rangeSummary(range: RangeAgg, days: number, mode: MeasurementMode): string {
   const avg = range.sessions > 0 ? range.totalCost / range.sessions : 0;
+
   const costPart =
     range.totalCost > 0
       ? `${formatUsd(range.totalCost)} · avg ${formatUsd(avg)}/session`
@@ -779,9 +892,11 @@ function rangeSummary(range: RangeAgg, days: number, mode: MeasurementMode): str
   if (mode === "tokens") {
     return `Last ${days} days: ${formatCount(range.sessions)} sessions · ${formatCount(range.totalTokens)} tokens · ${costPart}`;
   }
+
   if (mode === "messages") {
     return `Last ${days} days: ${formatCount(range.sessions)} sessions · ${formatCount(range.totalMessages)} messages · ${costPart}`;
   }
+
   return `Last ${days} days: ${formatCount(range.sessions)} sessions · ${costPart}`;
 }
 
@@ -791,6 +906,7 @@ async function computeBreakdown(
 ): Promise<BreakdownData> {
   const now = new Date();
   const ranges = new Map<number, RangeAgg>();
+
   for (const d of RANGE_DAYS) ranges.set(d, buildRangeAgg(d, now));
   const start = ranges.get(MAX_RANGE_DAYS)!.days[0].date;
 
@@ -814,19 +930,23 @@ async function computeBreakdown(
   });
 
   let parsedFiles = 0;
+
   for (const filePath of candidates) {
     if (signal?.aborted) break;
     parsedFiles += 1;
     onProgress?.({ phase: "parse", parsedFiles, totalFiles });
 
     const session = await parseSessionFile(filePath, signal);
+
     if (!session) continue;
 
     const sessionDay = localMidnight(session.startedAt);
+
     for (const d of RANGE_DAYS) {
       const range = ranges.get(d)!;
       const start = range.days[0].date;
       const end = range.days[range.days.length - 1].date;
+
       if (sessionDay < start || sessionDay > end) continue;
       addSessionToRange(range, session);
     }
@@ -839,14 +959,14 @@ async function computeBreakdown(
 
 export class BreakdownComponent implements Component {
   private data: BreakdownData;
-  private tui: TUI;
+  private tui: Pick<TUI, "requestRender">;
   private onDone: () => void;
   private rangeIndex = 1; // default 30d
   private measurement: MeasurementMode = "sessions";
   private cachedWidth?: number;
   private cachedLines?: string[];
 
-  constructor(data: BreakdownData, tui: TUI, onDone: () => void) {
+  constructor(data: BreakdownData, tui: Pick<TUI, "requestRender">, onDone: () => void) {
     this.data = data;
     this.tui = tui;
     this.onDone = onDone;
@@ -864,6 +984,7 @@ export class BreakdownComponent implements Component {
       data.toLowerCase() === "q"
     ) {
       this.onDone();
+
       return;
     }
 
@@ -878,10 +999,12 @@ export class BreakdownComponent implements Component {
       this.measurement = order[(idx + order.length + dir) % order.length] ?? "sessions";
       this.invalidate();
       this.tui.requestRender();
+
       return;
     }
 
     let nextIndex: number | undefined;
+
     if (matchesKey(data, Key.left) || data.toLowerCase() === "h") {
       nextIndex = this.rangeIndex - 1;
     } else if (matchesKey(data, Key.right) || data.toLowerCase() === "l") {
@@ -889,6 +1012,7 @@ export class BreakdownComponent implements Component {
     } else if (data === "1" || data === "2" || data === "3" || data === "4") {
       nextIndex = Number(data) - 1;
     }
+
     if (nextIndex === undefined) return;
 
     this.rangeIndex = (nextIndex + RANGE_DAYS.length) % RANGE_DAYS.length;
@@ -906,12 +1030,15 @@ export class BreakdownComponent implements Component {
     const tab = (days: number, idx: number): string => {
       const selected = idx === this.rangeIndex;
       let label = `${days}d`;
+
       if (days === 365) label = "1y";
+
       return selected ? bold(`[${label}]`) : dim(` ${label} `);
     };
 
     const metricTab = (mode: MeasurementMode, label: string): string => {
       const selected = mode === this.measurement;
+
       return selected ? bold(`[${label}]`) : dim(` ${label} `);
     };
 
@@ -921,6 +1048,7 @@ export class BreakdownComponent implements Component {
 
     const palette = choosePalette(range);
     const legendTitle = dim(`Top models (${selectedDays}d palette):`);
+
     const legendItems = renderLegendItems(
       palette.modelColors,
       palette.orderedModels,
@@ -935,6 +1063,7 @@ export class BreakdownComponent implements Component {
     const leftMargin = 4; // "Mon " (or 4 spaces)
     const graphArea = Math.max(1, width - leftMargin);
     let gap = 1;
+
     if (weeks * 2 - 1 > graphArea) gap = 0;
     // Each week column uses cellWidth + gap, except the last has no gap.
     const idealCellWidth = Math.floor((graphArea + gap) / Math.max(1, weeks)) - gap;
@@ -947,6 +1076,7 @@ export class BreakdownComponent implements Component {
       this.measurement,
       { cellWidth, gap },
     );
+
     const tableLines = renderModelTable(range, metric.kind, 8);
 
     const lines: string[] = [];
@@ -969,14 +1099,17 @@ export class BreakdownComponent implements Component {
       // Fit into 7 rows (same as graph). If too many, show a final "+N more" line.
       const maxLegendRows = graphLines.length;
       let legendLines = legendBlock.slice(0, maxLegendRows);
+
       if (legendBlock.length > maxLegendRows) {
         const remaining = legendBlock.length - (maxLegendRows - 1);
         legendLines = [...legendBlock.slice(0, maxLegendRows - 1), dim(`+${remaining} more`)];
       }
+
       while (legendLines.length < graphLines.length) legendLines.push("");
 
       const padRightAnsi = (s: string, target: number): string => {
         const w = visibleWidth(s);
+
         return w >= target ? s : s + " ".repeat(target - w);
       };
 
@@ -991,15 +1124,18 @@ export class BreakdownComponent implements Component {
       lines.push("");
       // Compact legend below, left-aligned.
       lines.push(truncateToWidth(legendTitle, width));
+
       for (const it of legendItems) lines.push(truncateToWidth(it, width));
     }
 
     lines.push("");
+
     for (const tl of tableLines) lines.push(truncateToWidth(tl, width));
 
     // Ensure no overly long lines (truncateToWidth already), but keep at least 1 line.
     this.cachedWidth = width;
     this.cachedLines = lines.map((l) => (visibleWidth(l) > width ? truncateToWidth(l, width) : l));
+
     return this.cachedLines;
   }
 }
@@ -1021,15 +1157,18 @@ export default function sessionBreakdownExtension(pi: ExtensionAPI) {
           },
           { triggerTurn: false },
         );
+
         return;
       }
 
       let aborted = false;
+
       const data = await ctx.ui.custom<BreakdownData | null>((tui, theme, _kb, done) => {
         const baseMessage = `Analyzing sessions (last ${MAX_RANGE_DAYS} days)…`;
         const loader = new BorderedLoader(tui, theme, baseMessage);
 
         const startedAt = Date.now();
+
         const progress: BreakdownProgressState = {
           phase: "scan",
           foundFiles: 0,
@@ -1039,20 +1178,30 @@ export default function sessionBreakdownExtension(pi: ExtensionAPI) {
 
         const renderMessage = (): string => {
           const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+
           if (progress.phase === "scan") {
             return `${baseMessage}  scanning (${formatCount(progress.foundFiles)} files) · ${elapsed}s`;
           }
+
           if (progress.phase === "parse") {
             return `${baseMessage}  parsing (${formatCount(progress.parsedFiles)}/${formatCount(progress.totalFiles)}) · ${elapsed}s`;
           }
+
           return `${baseMessage}  finalizing · ${elapsed}s`;
         };
 
+        // BorderedLoader exposes its children, but not a message setter.
+        const progressLoader = loader.children.find((child) => child instanceof Loader);
+
+        if (!progressLoader) throw new Error("BorderedLoader has no Loader child");
+
         // Update every 0.5s so long-running scans show some visible progress.
-        setBorderedLoaderMessage(loader, renderMessage());
+        progressLoader.setMessage(renderMessage());
+
         const intervalId = setInterval(() => {
-          setBorderedLoaderMessage(loader, renderMessage());
+          progressLoader.setMessage(renderMessage());
         }, 500);
+
         const stopTicker = () => clearInterval(intervalId);
 
         loader.onAbort = () => {
@@ -1064,11 +1213,13 @@ export default function sessionBreakdownExtension(pi: ExtensionAPI) {
         computeBreakdown(loader.signal, (update) => Object.assign(progress, update))
           .then((d) => {
             stopTicker();
+
             if (!aborted) done(d);
           })
           .catch((err) => {
             stopTicker();
             console.error("session-breakdown: failed to analyze sessions", err);
+
             if (!aborted) done(null);
           });
 
@@ -1080,6 +1231,7 @@ export default function sessionBreakdownExtension(pi: ExtensionAPI) {
           aborted ? "Cancelled" : "Failed to analyze sessions",
           aborted ? "info" : "error",
         );
+
         return;
       }
 

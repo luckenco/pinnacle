@@ -38,6 +38,7 @@ describe("skill toggle state", () => {
   it("stores only choices that differ from each skill's default", () => {
     const visible = skill("visible", false);
     const manual = skill("manual", true);
+
     const state: SkillToggleState = {
       version: 1,
       repository: "/repo",
@@ -61,6 +62,30 @@ describe("skill toggle state", () => {
     assert.notEqual(store.path("/repo/a"), store.path("/repo/b"));
     assert.deepEqual((await store.load("/repo/a")).overrides, { github: false });
     assert.deepEqual((await store.load("/repo/b")).overrides, { postgres: false });
+  });
+
+  it("rejects malformed persisted state", async () => {
+    const agentDir = await makeTemporaryDirectory();
+    const store = new SkillToggleStore(agentDir);
+    const path = store.path("/repo");
+    await fs.mkdir(dirname(path), { recursive: true });
+
+    const invalid = [
+      [[], /state must be an object/],
+      [{ version: 2 }, /unsupported skill toggle state version/],
+      [{ version: 1, repository: "/other" }, /repository mismatch/],
+      [{ version: 1, repository: "/repo", overrides: [] }, /overrides must be an object/],
+      [
+        { version: 1, repository: "/repo", overrides: { github: "no" } },
+        /map skill names to booleans/,
+      ],
+      [{ version: 1, repository: "/repo", overrides: { "": true } }, /map skill names to booleans/],
+    ] as const;
+
+    for (const [value, message] of invalid) {
+      await fs.writeFile(path, JSON.stringify(value));
+      await assert.rejects(store.load("/repo"), message);
+    }
   });
 
   it("does not overwrite a state file locked by another Pi session", async () => {
@@ -97,5 +122,6 @@ function skill(name: string, disableModelInvocation: boolean): Skill {
 async function makeTemporaryDirectory(): Promise<string> {
   const path = await fs.mkdtemp(join(os.tmpdir(), "pinnacle-skill-toggle-"));
   temporaryDirectories.push(path);
+
   return path;
 }

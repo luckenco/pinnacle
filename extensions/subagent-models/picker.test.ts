@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import {
   CURSOR_MARKER,
   KeybindingsManager,
@@ -16,23 +17,45 @@ const keys = new KeybindingsManager({
   "app.models.reorderUp": { defaultKeys: "alt+up" },
   "app.models.reorderDown": { defaultKeys: "alt+down" },
 });
+
 const theme = {
-  fg: (_color: unknown, text: string) => `\x1b[36m${text}\x1b[0m`,
+  fg: (_color: ThemeColor, text: string) => `\x1b[36m${text}\x1b[0m`,
   bold: (text: string) => `\x1b[1m${text}\x1b[22m`,
 };
+
+function model(fields: Pick<Model<Api>, "provider" | "id" | "name" | "reasoning">): Model<Api> {
+  return {
+    api: "openai-completions",
+    baseUrl: "https://example.invalid",
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1000,
+    maxTokens: 100,
+    ...fields,
+  };
+}
+
 const available = [
-  { provider: "codex", id: "eye", name: "Reasoner", reasoning: true },
-  { provider: "router", id: "family/reviewer", name: "Independent reviewer", reasoning: true },
-  { provider: "codex", id: "hand", name: "Implementer 界", reasoning: false },
-] as Model<Api>[];
+  model({ provider: "codex", id: "eye", name: "Reasoner", reasoning: true }),
+  model({
+    provider: "router",
+    id: "family/reviewer",
+    name: "Independent reviewer",
+    reasoning: true,
+  }),
+  model({ provider: "codex", id: "hand", name: "Implementer 界", reasoning: false }),
+];
+
 const empty = (): SubagentModels => ({ eye: [], hand: null, reasoning: { eye: {}, hand: null } });
 
 function open(initial: SubagentModels = empty(), models: Model<Api>[] | null = available) {
   const results: (SubagentModels | undefined)[] = [];
   const tui = { terminal: { rows: 26 }, requestRender: () => {} };
-  const picker = new ModelPicker(models, initial, tui as never, theme, keys, (result) =>
+
+  const picker = new ModelPicker(models, initial, tui, theme, keys, (result) =>
     results.push(result),
   );
+
   return { picker, results, tui };
 }
 
@@ -42,6 +65,7 @@ test("Enter requires an explicit supported reasoning level before adding an eye"
     hand: "codex/hand",
     reasoning: { eye: {}, hand: "off" },
   });
+
   picker.handleInput("Independent");
   picker.handleInput("\r");
   assert.match(picker.render(100).join("\n"), /EYE › router\/family\/reviewer › reasoning/);
@@ -67,6 +91,7 @@ test("existing eye levels edit independently and reordered entries keep their le
     hand: "codex/hand",
     reasoning: { eye: { "codex/eye": "high" }, hand: "off" },
   };
+
   const { picker, results } = open(initial);
   picker.handleInput("Independent");
   picker.handleInput("\r");
@@ -84,9 +109,10 @@ test("existing eye levels edit independently and reordered entries keep their le
 
 test("search preserves assigned eye order while reordering matching rows", () => {
   const models = [
-    { provider: "test", id: "alphabet", name: "Alphabet", reasoning: true },
-    { provider: "test", id: "alpha", name: "Alpha", reasoning: true },
-  ] as Model<Api>[];
+    model({ provider: "test", id: "alphabet", name: "Alphabet", reasoning: true }),
+    model({ provider: "test", id: "alpha", name: "Alpha", reasoning: true }),
+  ];
+
   const { picker, results } = open(
     {
       eye: ["test/alphabet", "test/alpha"],
@@ -95,6 +121,7 @@ test("search preserves assigned eye order while reordering matching rows", () =>
     },
     models,
   );
+
   picker.handleInput("alpha");
   const before = picker.render(100).join("\n");
   assert.ok(before.indexOf("test/alphabet ·") < before.indexOf("test/alpha ·"));
@@ -109,6 +136,7 @@ test("hand replacement requires reasoning even for off-only models, and can over
     hand: "codex/hand",
     reasoning: { eye: { "codex/eye": "high" }, hand: "off" },
   };
+
   const { picker, results } = open(initial);
   picker.handleInput("\t");
   picker.handleInput("codex/eye");
@@ -138,6 +166,7 @@ test("editing a different hand model does not preselect the previous model's lev
     hand: "codex/eye",
     reasoning: { eye: {}, hand: "high" },
   });
+
   picker.handleInput("\t");
   picker.handleInput("codex/hand");
   picker.handleInput("\r");
@@ -150,6 +179,7 @@ test("unsupported saved level requires an explicit new selection", () => {
     hand: "codex/hand",
     reasoning: { eye: { "codex/hand": "high" }, hand: "off" },
   };
+
   const { picker, results } = open(initial, [available[2]]);
   picker.handleInput("\r");
   picker.handleInput("\r"); // Cannot silently clamp high to off.
@@ -177,8 +207,9 @@ test("reasoning hints use the configured navigation, confirm and cancel keys", (
       "tui.select.cancel": "alt+l",
     },
   );
+
   const tui = { terminal: { rows: 26 }, requestRender: () => {} };
-  const picker = new ModelPicker(available, empty(), tui as never, theme, remapped, () => {});
+  const picker = new ModelPicker(available, empty(), tui, theme, remapped, () => {});
   picker.handleInput("\x1bk");
   const lines = picker.render(100).join("\n");
   assert.match(lines, /alt\+j/);
@@ -214,6 +245,7 @@ test("Remove drops eye and hand independently and prunes their reasoning", () =>
     hand: "codex/eye",
     reasoning: { eye: { "codex/eye": "high" }, hand: "high" },
   };
+
   const { picker, results } = open(initial);
   picker.handleInput("\r");
   picker.handleInput("\x1b[B"); // After high comes Remove.
@@ -234,6 +266,7 @@ test("unavailable saved assignments and unsupported levels remain visible until 
     hand: "gone/hand",
     reasoning: { eye: { "gone/eye": "high", "codex/hand": "high" }, hand: "low" },
   };
+
   const { picker, results } = open(initial, [available[2]]);
   assert.match(picker.render(100).join("\n"), /unavailable/);
   picker.handleInput("\x13");
@@ -255,22 +288,27 @@ test("unavailable saved assignments and unsupported levels remain visible until 
 });
 
 test("no-match, tiny panes and resizing keep choices visible and avoid blind editing", () => {
-  const models = Array.from({ length: 30 }, (_, i) => ({
-    provider: "test",
-    id: `model-${String(i).padStart(2, "0")}`,
-    name: "Model",
-    reasoning: true,
-  })) as Model<Api>[];
+  const models = Array.from({ length: 30 }, (_, i) =>
+    model({
+      provider: "test",
+      id: `model-${String(i).padStart(2, "0")}`,
+      name: "Model",
+      reasoning: true,
+    }),
+  );
+
   const { picker, results, tui } = open(undefined, models);
   picker.handleInput("\x1b[6~");
   assert.match(picker.render(100).join("\n"), /9\/30 matches/);
   picker.handleInput("\r");
+
   for (const height of [24, 18, 10, 5, 30]) {
     tui.terminal.rows = height + 2;
     const lines = picker.render(80);
     assert.ok(lines.length <= height);
     assert.ok(lines.some((line) => line.includes("Choose a supported level")));
   }
+
   tui.terminal.rows = 5;
   picker.render(80);
   picker.handleInput("\r");
@@ -279,6 +317,7 @@ test("no-match, tiny panes and resizing keep choices visible and avoid blind edi
   picker.handleInput("\x1b");
   tui.terminal.rows = 26; // Restored terminal size.
   picker.handleInput("no-such-model");
+
   for (const key of ["\r", "\x1b[A", "\x1b[B", "\x1b[6~"]) picker.handleInput(key);
   picker.handleInput("\x13");
   assert.deepEqual(results, []);
@@ -290,10 +329,12 @@ test("rendering fits narrow widths and forwards focus to the active input", () =
   picker.focused = true;
   picker.handleInput("界");
   assert.ok(picker.render(80).some((line) => line.includes(CURSOR_MARKER)));
+
   for (const width of [1, 10, 24, 80]) {
     for (const line of picker.render(width)) assert.ok(visibleWidth(line) <= width);
     picker.invalidate();
   }
+
   picker.handleInput("\x15");
   picker.handleInput("\r");
   assert.ok(picker.render(80).every((line) => !line.includes(CURSOR_MARKER)));

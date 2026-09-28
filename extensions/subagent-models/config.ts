@@ -10,6 +10,8 @@ import {
 } from "node:fs";
 import { dirname } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
+import { Value } from "typebox/value";
 
 export type SubagentModels = {
   eye: string[];
@@ -19,107 +21,116 @@ export type SubagentModels = {
 
 export function missingAssignments(config: SubagentModels): ("eye" | "hand")[] {
   const missing: ("eye" | "hand")[] = [];
+
   if (config.eye.length === 0) missing.push("eye");
+
   if (config.hand === null) missing.push("hand");
+
   return missing;
 }
 
-const levels = new Set<ModelThinkingLevel>([
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
+const level = Type.Union([
+  Type.Literal("off"),
+  Type.Literal("minimal"),
+  Type.Literal("low"),
+  Type.Literal("medium"),
+  Type.Literal("high"),
+  Type.Literal("xhigh"),
+  Type.Literal("max"),
 ]);
 
-function isLevel(value: unknown): value is ModelThinkingLevel {
-  return typeof value === "string" && levels.has(value as ModelThinkingLevel);
-}
+const id = Type.String({ pattern: "^[^/]+/[\\s\\S]+$" });
+
+const assignments = Type.Object(
+  {
+    eye: Type.Array(id, { uniqueItems: true }),
+    hand: Type.Union([id, Type.Null()]),
+    reasoning: Type.Unknown(),
+  },
+  { additionalProperties: false },
+);
+
+const reasoningConfig = Type.Object(
+  { eye: Type.Record(Type.String(), level), hand: Type.Union([level, Type.Null()]) },
+  { additionalProperties: false },
+);
+
+const errno = Type.Object({ code: Type.String() });
 
 function read(path: string): string | null {
   try {
     return readFileSync(path, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if (Value.Check(errno, error) && error.code === "ENOENT") return null;
     throw error;
   }
 }
 
-function modelId(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  const slash = value.indexOf("/");
-  return slash > 0 && slash < value.length - 1;
-}
+type LoadedConfig = { config: SubagentModels; raw: string | null };
 
-export function loadConfig(path: string): { config: SubagentModels; raw: string | null } {
+export function loadConfig(path: string): LoadedConfig {
   const raw = read(path);
+
   if (raw === null) {
     return { config: { eye: [], hand: null, reasoning: { eye: {}, hand: null } }, raw };
   }
-  const value = JSON.parse(raw);
-  if (
-    !value ||
-    typeof value !== "object" ||
-    Object.keys(value).some((key) => key !== "eye" && key !== "hand" && key !== "reasoning") ||
-    !Array.isArray(value.eye) ||
-    !value.eye.every(modelId) ||
-    new Set(value.eye).size !== value.eye.length ||
-    !(value.hand === null || modelId(value.hand))
-  ) {
+
+  const value: unknown = JSON.parse(raw);
+
+  if (!Value.Check(assignments, value)) {
     throw new Error(`Invalid config at ${path}: expected unique eye IDs and one hand ID or null`);
   }
+
   const reasoning = value.reasoning;
+
   if (
-    !reasoning ||
-    typeof reasoning !== "object" ||
-    Array.isArray(reasoning) ||
-    Object.keys(reasoning).some((key) => key !== "eye" && key !== "hand") ||
-    !reasoning.eye ||
-    typeof reasoning.eye !== "object" ||
-    Array.isArray(reasoning.eye) ||
-    Object.entries(reasoning.eye).some(
-      ([id, level]) => !value.eye.includes(id) || !isLevel(level),
-    ) ||
-    value.eye.some((id: string) => !Object.hasOwn(reasoning.eye, id)) ||
-    (value.hand === null ? reasoning.hand !== null : !isLevel(reasoning.hand))
+    !Value.Check(reasoningConfig, reasoning) ||
+    Object.keys(reasoning.eye).some((id) => !value.eye.includes(id)) ||
+    value.eye.some((id) => !Object.hasOwn(reasoning.eye, id)) ||
+    (value.hand === null ? reasoning.hand !== null : reasoning.hand === null)
   ) {
     throw new Error(`Invalid reasoning configuration at ${path}`);
   }
-  return {
-    config: {
-      eye: value.eye,
-      hand: value.hand,
-      reasoning: { eye: reasoning.eye, hand: reasoning.hand },
-    },
-    raw,
+
+  const config: SubagentModels = {
+    eye: value.eye,
+    hand: value.hand,
+    reasoning: { eye: reasoning.eye, hand: reasoning.hand },
   };
+
+  return { config, raw };
 }
 
 export function saveConfig(path: string, baseline: string | null, config: SubagentModels): void {
   const missing = missingAssignments(config);
+
   if (missing.length) {
     throw new Error(
       `Subagent models require at least one eye and one hand (${missing.join(", ")} missing)`,
     );
   }
+
   mkdirSync(dirname(path), { recursive: true });
   const lockPath = `${path}.lock`;
   let lock: number;
+
   try {
     lock = openSync(lockPath, "wx", 0o600);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+    if (Value.Check(errno, error) && error.code === "EEXIST") {
       throw new Error(`Config is locked: ${lockPath}. Reopen after the other writer finishes.`);
     }
+
     throw error;
   }
+
   const temp = `${path}.${randomUUID()}.tmp`;
+
   try {
     if (read(path) !== baseline) {
       throw new Error("Config changed in another session. Reopen /subagent-models; nothing saved.");
     }
+
     writeFileSync(temp, `${JSON.stringify(config, null, 2)}\n`, { flag: "wx", mode: 0o600 });
     renameSync(temp, path);
   } finally {

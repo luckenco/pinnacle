@@ -21,10 +21,12 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBashTool } from "@earendil-works/pi-coding-agent";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
 const interceptedCommandsPath = join(__dirname, "..", "intercepted-commands");
 
 export default function (pi: ExtensionAPI) {
   const cwd = process.cwd();
+
   const bashTool = createBashTool(cwd, {
     commandPrefix: `export PATH="${interceptedCommandsPath}:$PATH"`,
   });

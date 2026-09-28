@@ -3,6 +3,7 @@ import { join } from "node:path";
 import {
   clampThinkingLevel,
   type Model,
+  type Api,
   type SimpleStreamOptions,
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
@@ -10,6 +11,8 @@ import {
   streamOpenAICodexResponses as streamCodex,
   streamSimpleOpenAICodexResponses as streamSimpleCodex,
 } from "@earendil-works/pi-ai/compat";
+import { Type } from "typebox";
+import { Value } from "typebox/value";
 import {
   type ExtensionAPI,
   type ExtensionContext,
@@ -17,11 +20,19 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 const STATUS_KEY = "codex-fast";
+
+const fastModeSchema = Type.Object({ enabled: Type.Boolean() });
+
 type CodexModel = Model<"openai-codex-responses">;
+
 type CodexStreamers = { full: typeof streamCodex; simple: typeof streamSimpleCodex };
 
 export function isCodex(model: Pick<Model<string>, "provider"> | undefined): boolean {
   return model?.provider === "openai-codex";
+}
+
+function isCodexApi(model: Model<Api>): model is CodexModel {
+  return model.api === "openai-codex-responses";
 }
 
 const configPath = (agentDir: string) => join(agentDir, "extensions", "codex-fast.json");
@@ -29,9 +40,8 @@ const configPath = (agentDir: string) => join(agentDir, "extensions", "codex-fas
 export function loadFastMode(agentDir: string): boolean {
   try {
     const value: unknown = JSON.parse(readFileSync(configPath(agentDir), "utf8"));
-    return Boolean(
-      value && typeof value === "object" && "enabled" in value && value.enabled === true,
-    );
+
+    return Value.Check(fastModeSchema, value) && value.enabled;
   } catch {
     return false;
   }
@@ -52,6 +62,7 @@ export function routeCodex(
 ) {
   if (!enabled || !isCodex(model)) return streamers.simple(model, context, options);
   const effort = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
+
   return streamers.full(model, context, {
     ...options,
     reasoningEffort: effort === "off" ? undefined : effort,
@@ -71,8 +82,13 @@ export default function codexFast(pi: ExtensionAPI) {
 
   pi.registerProvider("openai-codex", {
     api: "openai-codex-responses",
-    streamSimple: (model, context, options) =>
-      routeCodex(model as CodexModel, context, options, enabled),
+    streamSimple: (model, context, options) => {
+      if (!isCodexApi(model)) {
+        throw new Error(`Expected Codex Responses API, got ${model.api}`);
+      }
+
+      return routeCodex(model, context, options, enabled);
+    },
   });
 
   pi.on("session_start", (_event, ctx) => syncStatus(ctx));
@@ -83,10 +99,13 @@ export default function codexFast(pi: ExtensionAPI) {
     description: "Request Codex priority service (increased usage); toggle or on/off",
     handler: async (args, ctx) => {
       const action = args.trim().toLowerCase();
+
       if (action !== "" && action !== "on" && action !== "off") {
         ctx.ui.notify("Usage: /fast [on|off]", "warning");
+
         return;
       }
+
       enabled = action === "on" || (action === "" && !enabled);
       saveFastMode(agentDir, enabled);
       syncStatus(ctx);

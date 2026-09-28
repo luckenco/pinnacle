@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
-import type { TUI } from "@earendil-works/pi-tui";
 import { BreakdownComponent, buildRangeAgg } from "../session-breakdown";
 
 for (const width of [40, 200]) {
@@ -16,10 +15,12 @@ for (const width of [40, 200]) {
         const day = range.days[0];
         day.sessions = 1;
         day.sessionsByModel.set(model, 1);
+
         return [days, range];
       }),
     );
-    const component = new BreakdownComponent({ ranges }, { requestRender() {} } as TUI, () => {});
+
+    const component = new BreakdownComponent({ ranges }, { requestRender() {} }, () => {});
 
     for (const [key, days] of [
       ["2", 30],
@@ -33,9 +34,11 @@ for (const width of [40, 200]) {
       const output = stripVTControlCharacters(lines.join("\n"));
       assert.ok(output.includes(`Top models (${days}d palette):`));
       assert.ok(output.includes(`█ model-${days}`));
+
       for (const otherDays of ranges.keys()) {
         if (otherDays !== days) assert.ok(!output.includes(`█ model-${otherDays}`));
       }
+
       // Both the active graph cell and its legend swatch use the top-model color.
       assert.equal(lines.join("\n").split("\x1b[38;2;64;196;99m").length - 1, 2);
     }
@@ -44,11 +47,13 @@ for (const width of [40, 200]) {
 
 test("an empty selected range renders an empty model palette", () => {
   const empty = buildRangeAgg(7, new Date(2026, 8, 28));
+
   const component = new BreakdownComponent(
     { ranges: new Map([[7, empty]]) },
-    { requestRender() {} } as TUI,
+    { requestRender() {} },
     () => {},
   );
+
   component.handleInput("1");
   const output = stripVTControlCharacters(component.render(100).join("\n"));
   assert.ok(output.includes("Top models (7d palette):"));
@@ -77,9 +82,10 @@ test("cost mode renders daily spend and cost-weighted model colors", () => {
 
   const component = new BreakdownComponent(
     { ranges: new Map([[7, range]]) },
-    { requestRender() {} } as TUI,
+    { requestRender() {} },
     () => {},
   );
+
   selectCost(component);
 
   const lines = component.render(200);
@@ -105,9 +111,10 @@ test("cost mode falls back when the selected range has no cost data", () => {
 
   const component = new BreakdownComponent(
     { ranges: new Map([[7, range]]) },
-    { requestRender() {} } as TUI,
+    { requestRender() {} },
     () => {},
   );
+
   selectCost(component);
 
   const lines = component.render(100);

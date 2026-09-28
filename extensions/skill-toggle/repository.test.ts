@@ -32,6 +32,8 @@ async function makeTemporaryDirectory(): Promise<string> {
   const path = await fs.realpath(
     await fs.mkdtemp(join(os.tmpdir(), "pinnacle-skill-toggle-repo-")),
   );
+
   temporaryDirectories.push(path);
+
   return path;
 }

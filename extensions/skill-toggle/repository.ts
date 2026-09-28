@@ -10,6 +10,7 @@ export async function findRepositoryRoot(cwd: string): Promise<string> {
     if ((await exists(join(current, ".jj"))) || (await exists(join(current, ".git")))) {
       return current;
     }
+
     if (current === filesystemRoot) return startingDirectory;
     current = dirname(current);
   }
@@ -18,6 +19,7 @@ export async function findRepositoryRoot(cwd: string): Promise<string> {
 async function exists(path: string): Promise<boolean> {
   try {
     await fs.access(path);
+
     return true;
   } catch {
     return false;

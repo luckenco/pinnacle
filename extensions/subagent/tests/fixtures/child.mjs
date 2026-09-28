@@ -1,14 +1,19 @@
 const args = process.argv.slice(2);
+
 const task = args.at(-1).replace(/^Task: /, "");
+
 if (task === "empty") process.exit(0);
+
 if (task === "fail") {
   process.stderr.write("fixture failure");
   process.exit(7);
 }
+
 if (task === "hang") {
   process.on("SIGTERM", () => {});
   setInterval(() => {}, 1000);
 }
+
 const event = Buffer.from(
   JSON.stringify({
     type: "message_end",
@@ -25,8 +30,12 @@ const event = Buffer.from(
     },
   }),
 );
+
 // Exercise a UTF-8 character split across chunks and a final record without LF.
 const split = event.indexOf(Buffer.from("✓")) + 1;
+
 process.stdout.write(event.subarray(0, split));
+
 setTimeout(() => process.stdout.write(event.subarray(split)), 10);
+
 if (task === "hang") setTimeout(() => process.stdout.write("\n"), 20);

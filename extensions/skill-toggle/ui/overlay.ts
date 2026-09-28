@@ -42,31 +42,37 @@ class SkillToggleOverlay {
   handleInput(data: string): void {
     if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
       this.done({ action: "cancel", changes: {} });
+
       return;
     }
 
     if (matchesKey(data, Key.ctrl("s"))) {
       this.done({ action: "apply", changes: this.getChanges() });
+
       return;
     }
 
     if (matchesKey(data, Key.up)) {
       this.moveSelection(-1);
+
       return;
     }
 
     if (matchesKey(data, Key.down)) {
       this.moveSelection(1);
+
       return;
     }
 
     if (matchesKey(data, Key.enter)) {
       const selected = this.getSelectedChoice();
+
       if (selected) {
         const name = selected.skill.name;
         this.desired.set(name, !(this.desired.get(name) ?? selected.modelEnabled));
         this.tui.requestRender();
       }
+
       return;
     }
 
@@ -76,6 +82,7 @@ class SkillToggleOverlay {
         this.selectedIndex = 0;
         this.tui.requestRender();
       }
+
       return;
     }
 
@@ -94,11 +101,13 @@ class SkillToggleOverlay {
     const rightWidth = Math.max(28, innerWidth - leftWidth - 1);
 
     const header = this.renderHeader(innerWidth);
+
     const search = frameLine(
       this.theme,
       this.theme.fg("muted", `Search: ${this.search || "(type to filter)"}`),
       innerWidth,
     );
+
     const body = combineColumns(
       this.renderList(leftWidth, bodyHeight),
       this.renderDetails(rightWidth, bodyHeight),
@@ -139,6 +148,7 @@ class SkillToggleOverlay {
     const changed = Object.keys(this.getChanges()).length;
     const summary = this.theme.fg("muted", `${this.choices.length} skills • ${changed} changed`);
     const gap = Math.max(1, innerWidth - visibleWidth(title) - visibleWidth(summary));
+
     return `${title}${" ".repeat(gap)}${summary}`;
   }
 
@@ -148,11 +158,13 @@ class SkillToggleOverlay {
 
     if (filtered.length === 0) {
       lines.push(this.theme.fg("dim", "No matching skills"));
+
       return pad(lines, height);
     }
 
     this.selectedIndex = clamp(this.selectedIndex, 0, filtered.length - 1);
     const visibleCount = Math.max(4, Math.floor(height / 2));
+
     const start = Math.max(
       0,
       Math.min(
@@ -160,10 +172,12 @@ class SkillToggleOverlay {
         Math.max(0, filtered.length - visibleCount),
       ),
     );
+
     const end = Math.min(filtered.length, start + visibleCount);
 
     for (let i = start; i < end; i += 1) {
       const choice = filtered[i];
+
       if (!choice) continue;
       const desired = this.desired.get(choice.skill.name) ?? choice.modelEnabled;
       const selected = i === this.selectedIndex;
@@ -189,8 +203,10 @@ class SkillToggleOverlay {
   private renderDetails(width: number, height: number): string[] {
     const choice = this.getSelectedChoice();
     const lines: string[] = [];
+
     if (!choice) {
       lines.push(this.theme.fg("dim", "No skill selected"));
+
       return pad(lines, height);
     }
 
@@ -221,6 +237,7 @@ class SkillToggleOverlay {
 
   private moveSelection(delta: number): void {
     const filtered = this.getFilteredChoices();
+
     if (filtered.length === 0) return;
     this.selectedIndex = clamp(this.selectedIndex + delta, 0, filtered.length - 1);
     this.tui.requestRender();
@@ -234,17 +251,21 @@ class SkillToggleOverlay {
     return this.getFilteredChoices()[this.selectedIndex];
   }
 
-  private getChanges(): Record<string, boolean> {
+  private getChanges() {
     const changes: Record<string, boolean> = {};
+
     for (const choice of this.choices) {
       const desired = this.desired.get(choice.skill.name) ?? choice.modelEnabled;
+
       if (desired !== choice.modelEnabled) changes[choice.skill.name] = desired;
     }
+
     return changes;
   }
 
   private getPanelHeight(): number {
     const rows = this.tui.terminal.rows ?? 30;
+
     return clamp(Math.floor(rows * 0.82), 16, 52);
   }
 }
@@ -265,7 +286,9 @@ function clamp(value: number, min: number, max: number): number {
 
 function pad(lines: string[], height: number): string[] {
   const padded = [...lines];
+
   while (padded.length < height) padded.push("");
+
   return padded.slice(0, height);
 }
 
@@ -275,9 +298,11 @@ function shorten(text: string, width: number): string {
 
 function wrap(text: string, width: number): string[] {
   const words = text.split(/\s+/).filter(Boolean);
+
   if (words.length === 0) return [""];
   const lines: string[] = [];
   let current = "";
+
   for (const word of words) {
     if (current.length === 0) {
       current = word;
@@ -288,6 +313,8 @@ function wrap(text: string, width: number): string[] {
       current = word;
     }
   }
+
   if (current) lines.push(current);
+
   return lines;
 }

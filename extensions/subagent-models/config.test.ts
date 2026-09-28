@@ -6,11 +6,14 @@ import { afterEach, beforeEach, test } from "node:test";
 import { loadConfig, type SubagentModels, saveConfig } from "./config";
 
 let root: string;
+
 let path: string;
+
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "subagent-models-config-"));
   path = join(root, "extensions", "subagent-models.json");
 });
+
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 const config: SubagentModels = {
@@ -45,12 +48,14 @@ test("model IDs with internal spaces round-trip without locking the picker out",
     hand: "local/my model",
     reasoning: { eye: { "local/my model": "high" }, hand: "off" },
   };
+
   saveConfig(path, null, config);
   assert.deepEqual(loadConfig(path).config, config);
 });
 
 test("invalid or unreadable configuration is not silently reset", () => {
   mkdirSync(join(root, "extensions"));
+
   for (const raw of [
     "{",
     "null",
@@ -67,12 +72,17 @@ test("invalid or unreadable configuration is not silently reset", () => {
     '{"eye":["a/b"],"hand":null,"reasoning":{"eye":{},"hand":null}}',
     '{"eye":[],"hand":"a/b","reasoning":{"eye":{},"hand":null}}',
     '{"eye":[],"hand":null,"reasoning":{"eye":{},"hand":"high"}}',
+    '{"eye":[],"hand":null,"reasoning":{"eye":[],"hand":null}}',
+    '{"eye":[],"hand":null,"reasoning":{"eye":{},"hand":null,"extra":true}}',
+    '{"eye":[],"hand":null,"reasoning":{"eye":{},"hand":0}}',
+    '{"eye":[],"hand":null,"reasoning":{"eye":{},"hand":null},"extra":true}',
     '{"eye":["a/b"],"hand":null,"reasoning":{"eye":{"a/b":"ultra"},"hand":null}}',
   ]) {
     writeFileSync(path, raw);
     assert.throws(() => loadConfig(path));
     assert.equal(readFileSync(path, "utf8"), raw);
   }
+
   rmSync(path);
   mkdirSync(path);
   assert.throws(() => loadConfig(path));

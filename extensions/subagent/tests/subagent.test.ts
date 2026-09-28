@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import type { Api, Message, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
+import { Value } from "typebox/value";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -14,9 +16,13 @@ import { type SubagentModels, saveConfig } from "../../subagent-models/config";
 import subagent from "../index";
 
 let root: string;
+
 let tool: Pick<ToolDefinition, "execute">;
+
 let ctx: ExtensionContext;
+
 let configPath: string;
+
 let previousScript: string;
 
 beforeEach(() => {
@@ -24,18 +30,32 @@ beforeEach(() => {
   previousScript = process.argv[1];
   process.argv[1] = fileURLToPath(new URL("./fixtures/child.mjs", import.meta.url));
   configPath = join(root, "subagent-models.json");
-  const models = [
-    { provider: "test", id: "eye-a", reasoning: true },
-    { provider: "test", id: "eye-b", reasoning: false },
-    { provider: "test", id: "hand", reasoning: true },
-    { provider: "test", id: "overflow", reasoning: true },
-  ] as Model<Api>[];
+
+  const models: Model<Api>[] = [
+    { id: "eye-a", reasoning: true },
+    { id: "eye-b", reasoning: false },
+    { id: "hand", reasoning: true },
+    { id: "overflow", reasoning: true },
+  ].map((fields) => ({
+    api: "openai-completions",
+    provider: "test",
+    name: fields.id,
+    baseUrl: "https://example.invalid",
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1000,
+    maxTokens: 100,
+    ...fields,
+  }));
+
+  // SAFETY: this fixture is only passed to the registered tool, which reads these context fields.
   ctx = {
     cwd: root,
     model: { provider: "test", id: "parent" },
     modelRegistry: { getAvailable: () => models },
     thinkingLevel: "high",
   } as ExtensionContext;
+  // SAFETY: registration only calls registerTool; no other ExtensionAPI method is used.
   subagent(
     {
       registerTool: (definition) => {
@@ -54,23 +74,46 @@ afterEach(() => {
 function text(result: Awaited<ReturnType<ToolDefinition["execute"]>>) {
   const part = result.content[0];
   assert.equal(part.type, "text");
+
   return part.text;
 }
 
+const resultSchema = Type.Object({
+  results: Type.Array(
+    Type.Object({
+      messages: Type.Array(Type.Unknown()),
+      usage: Type.Object({ turns: Type.Number() }),
+    }),
+  ),
+});
+
+const assistantSchema = Type.Object({
+  role: Type.Literal("assistant"),
+  content: Type.Array(Type.Object({ type: Type.Literal("text"), text: Type.String() })),
+});
+
+const childSchema = Type.Object({ args: Type.Array(Type.String()) });
+
 function childArgs(result: Awaited<ReturnType<ToolDefinition["execute"]>>, index = 0): string[] {
-  const messages = (result.details as { results: Array<{ messages: Message[] }> }).results[index]
-    .messages;
-  let message: Message | undefined;
-  for (let cursor = messages.length - 1; cursor >= 0; cursor--) {
-    if (messages[cursor].role === "assistant") {
-      message = messages[cursor];
+  const details = result.details;
+  assert.ok(Value.Check(resultSchema, details));
+  const messages = details.results[index].messages;
+  let message: unknown;
+
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (Value.Check(assistantSchema, messages[index])) {
+      message = messages[index];
       break;
     }
   }
-  assert.ok(message && message.role === "assistant");
+
+  assert.ok(Value.Check(assistantSchema, message));
   const part = message.content.find((item) => item.type === "text" && item.text.startsWith("{"));
-  assert.ok(part && part.type === "text");
-  return JSON.parse(part.text).args;
+  assert.ok(part);
+  const payload: unknown = JSON.parse(part.text);
+  assert.ok(Value.Check(childSchema, payload));
+
+  return payload.args;
 }
 
 function saveModels(overrides: Partial<SubagentModels> = {}): void {
@@ -80,12 +123,14 @@ function saveModels(overrides: Partial<SubagentModels> = {}): void {
     reasoning: { eye: { "test/eye-a": "high", "test/eye-b": "off" }, hand: "low" },
     ...overrides,
   };
+
   saveConfig(configPath, null, config);
 }
 
 test("a task inherits the parent's model/thinking and defaults to read-only tools", async () => {
   const cwd = join(root, "workspace");
   mkdirSync(cwd);
+
   const result = await tool.execute(
     "single",
     { task: { task: "inspect", cwd } },
@@ -93,6 +138,7 @@ test("a task inherits the parent's model/thinking and defaults to read-only tool
     undefined,
     ctx,
   );
+
   const child = JSON.parse(text(result).split("\n")[1]);
   assert.equal(child.cwd, cwd);
   assert.equal(child.args[child.args.indexOf("--model") + 1], "test/parent");
@@ -100,10 +146,8 @@ test("a task inherits the parent's model/thinking and defaults to read-only tool
   assert.equal(child.args[child.args.indexOf("--tools") + 1], "read,grep,find,ls");
   assert.equal(child.args[child.args.indexOf("--exclude-tools") + 1], "subagent");
   assert.match(text(result), /^inspect ✓\n/);
-  assert.equal(
-    (result.details as { results: Array<{ usage: { turns: number } }> }).results[0].usage.turns,
-    1,
-  );
+  assert.ok(Value.Check(resultSchema, result.details));
+  assert.equal(result.details.results[0].usage.turns, 1);
 });
 
 test("per-task model, tool permissions, and workspace override the defaults", async () => {
@@ -122,6 +166,7 @@ test("per-task model, tool permissions, and workspace override the defaults", as
     undefined,
     ctx,
   );
+
   const args: string[] = JSON.parse(text(result).split("\n")[1]).args;
   assert.equal(args[args.indexOf("--model") + 1], "test/override");
   assert.equal(args[args.indexOf("--tools") + 1], "read,bash,edit,write");
@@ -131,6 +176,7 @@ test("per-task model, tool permissions, and workspace override the defaults", as
 test("configured roles apply eye order, the hand, and saved reasoning", async () => {
   saveModels();
   const updates: string[] = [];
+
   const result = await tool.execute(
     "roles",
     {
@@ -144,28 +190,34 @@ test("configured roles apply eye order, the hand, and saved reasoning", async ()
     undefined,
     (update) => {
       const part = update.content[0];
+
       if (part.type === "text") updates.push(part.text);
     },
     ctx,
   );
+
   const expected = [
     ["test/hand", "low"],
     ["test/eye-a", "high"],
     ["test/overflow", undefined],
     ["test/eye-b", "off"],
   ];
+
   for (const [index, [model, thinking]] of expected.entries()) {
     const args = childArgs(result, index);
     assert.equal(args[args.indexOf("--model") + 1], model);
     assert.equal(args.includes("--thinking"), thinking !== undefined);
+
     if (thinking !== undefined) assert.equal(args[args.indexOf("--thinking") + 1], thinking);
   }
+
   assert.match(updates[0], /first eye: test\/eye-a @ high \(eye\)/);
   assert.match(updates[0], /overflow: test\/overflow \(explicit\)/);
 });
 
 test("an eye can be selected by index without changing explicit model behavior", async () => {
   saveModels();
+
   const selected = await tool.execute(
     "selected-eye",
     { task: { task: "inspect", role: "eye", eyeIndex: 2 } },
@@ -173,6 +225,7 @@ test("an eye can be selected by index without changing explicit model behavior",
     undefined,
     ctx,
   );
+
   const selectedArgs = childArgs(selected);
   assert.equal(selectedArgs[selectedArgs.indexOf("--model") + 1], "test/eye-b");
   assert.equal(selectedArgs[selectedArgs.indexOf("--thinking") + 1], "off");
@@ -257,6 +310,7 @@ test("parallel returns successful results and failed child diagnostics separatel
     undefined,
     ctx,
   );
+
   assert.match(text(result), /1\/3 succeeded/);
   assert.match(text(result), /inspect ✓/);
   assert.match(text(result), /second \(failed/);
@@ -272,6 +326,7 @@ test("chains substitute previous output and stop at a failed child", async () =>
     undefined,
     ctx,
   );
+
   assert.match(text(result), /after first ✓/);
   await assert.rejects(
     tool.execute(
@@ -314,6 +369,7 @@ test("invalid modes and oversized batches fail without running children", async 
 test("cancellation kills a child ignoring SIGTERM", { timeout: 12000 }, async () => {
   const controller = new AbortController();
   let pid: number | undefined;
+
   try {
     await assert.rejects(
       tool.execute(
@@ -321,15 +377,18 @@ test("cancellation kills a child ignoring SIGTERM", { timeout: 12000 }, async ()
         { task: { task: "hang" } },
         controller.signal,
         (update) => {
-          const details = (update.details as { results: Array<{ messages: Message[] }> })
-            .results[0];
-          const message = details?.messages?.at(-1);
-          if (pid || message?.role !== "assistant") return;
-          const part = message.content.find(
-            (part) => part.type === "text" && part.text.startsWith("{"),
-          );
-          if (part?.type !== "text") return;
-          pid = JSON.parse(part.text).pid;
+          if (!Value.Check(resultSchema, update.details)) return;
+          const message = update.details.results[0]?.messages.at(-1);
+
+          if (pid || !Value.Check(assistantSchema, message)) return;
+
+          const part = message.content.find((part) => part.text.startsWith("{"));
+
+          if (!part) return;
+          const payload: unknown = JSON.parse(part.text);
+
+          if (!Value.Check(Type.Object({ pid: Type.Number() }), payload)) return;
+          pid = payload.pid;
           controller.abort();
         },
         ctx,
