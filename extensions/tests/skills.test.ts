@@ -65,6 +65,19 @@ test("alphabetical default and name matches before description matches", () => {
   );
 });
 
+test("list shows only names while descriptions remain in details and search", () => {
+  const { picker } = open();
+  const lines = picker.render(100);
+  assert.deepEqual(lines.slice(3, 6), ["› alpha", "  database", "  zebra"]);
+  assert.equal(lines[lines.indexOf("Description:") + 1], "text workflows");
+
+  picker.handleInput("workflows");
+  const filtered = picker.render(100);
+  assert.match(filtered.join("\n"), /1 matches · 1 selected/);
+  assert.equal(filtered[3], "› alpha");
+  assert.equal(filtered[filtered.indexOf("Description:") + 1], "text workflows");
+});
+
 test("picker searches descriptions, includes manual-only skills and selects without invoking", () => {
   const { picker, results } = open();
   assert.match(picker.render(100).join("\n"), /3 available/);

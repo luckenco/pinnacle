@@ -127,7 +127,7 @@ export class SkillPicker implements Component, Focusable {
     ];
 
     for (const [index, skill] of this.matches.slice(start, start + pageSize).entries()) {
-      const row = `${start + index === this.cursor ? "›" : " "} ${skill.name} — ${skill.description.replace(/\s+/g, " ")}`;
+      const row = `${start + index === this.cursor ? "›" : " "} ${skill.name}`;
       lines.push(start + index === this.cursor ? this.theme.fg("accent", row) : row);
     }
 
