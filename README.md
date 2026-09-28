@@ -8,7 +8,7 @@ Personal Pi package for extensions, skills, prompts, and themes.
 - [`codex-fast`](extensions/codex-fast/): Adds `/fast` to persistently request OpenAI Codex priority service and show its status.
 - [`git-interceptor`](extensions/git-interceptor.ts): Prevents Git editor hangs and blocks agents from bypassing hooks with `--no-verify`.
 - [`notify`](extensions/notify.ts): Sends an OSC 777 desktop notification when an agent finishes and waits for input.
-- [`session-breakdown`](extensions/session-breakdown.ts): Adds `/session-breakdown` for interactive 7/30/90-day session, token, model, and cost summaries.
+- [`session-breakdown`](extensions/session-breakdown.ts): Adds `/session-breakdown` for interactive 7/30/90-day and 1-year (365-day) session, token, model, and cost summaries.
 - [`skill-toggle`](extensions/skill-toggle/): Adds `/toggle-skills` to switch skills between agent-invocable and manual-only modes.
 - [`subagent`](extensions/subagent/): Dispatches self-contained single, parallel, or chained tasks in separate Pi processes.
 - [`subagent-models`](extensions/subagent-models/): Adds `/subagent-models` and resolves subagent eye and hand roles with explicit reasoning levels.
@@ -42,8 +42,9 @@ Subagent tasks request `role: "eye"` or `role: "hand"`; `eyeIndex` can select a 
 
 ## Scripts and supporting assets
 
-- [`scripts/smoke.sh`](scripts/smoke.sh): Runs the repository's formatting, lint, and type checks through `bun run check`.
 - [`intercepted-commands/`](intercepted-commands/): Provides the `pip`, `pip3`, `poetry`, `python`, and `python3` shims used by the `uv` extension.
+- [`skills/principles/`](skills/principles/): Holds shared workflow principles referenced by skills rather than exposed as separate skills.
+- [`skills/show-me-your-work/scripts/log.sh`](skills/show-me-your-work/scripts/log.sh): Appends sanitized rows to a decision log with timestamps and spreadsheet-formula protection.
 - [`doom-peacock`](themes/doom-peacock.json), [`gruvbox-dark-hard`](themes/gruvbox-dark-hard.json), and [`gruvbox-dark`](themes/gruvbox-dark.json): Bundled Pi themes.
 - [`prompts/`](prompts/): Reserved for package prompt templates and currently empty.
 
