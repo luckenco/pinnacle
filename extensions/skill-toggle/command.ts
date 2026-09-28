@@ -1,89 +1,71 @@
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { SkillTogglePlanner } from "./apply/planner";
-import type { SkillChangeWriter } from "./apply/writer";
-import type { SkillInventory } from "./inventory/loader";
-import type { ApplyResult, SkillChange, SkillRecord } from "./types";
+import type { ExtensionCommandContext, Skill } from "@earendil-works/pi-coding-agent";
+import { findRepositoryRoot } from "./repository";
+import { applyChanges, effectiveModelEnabled, type SkillToggleStore } from "./state";
+import type { SkillChoice } from "./types";
 import { showSkillToggleUi } from "./ui/overlay";
-
-export interface ToggleSkillsCommandDeps {
-  inventory: SkillInventory;
-  planner: SkillTogglePlanner;
-  writer: SkillChangeWriter;
-}
 
 export async function runToggleSkillsCommand(
   ctx: ExtensionCommandContext,
-  deps: ToggleSkillsCommandDeps,
+  store: SkillToggleStore,
 ): Promise<void> {
-  if (!ctx.hasUI) {
-    ctx.ui.notify("/toggle-skills requires interactive mode", "error");
+  if (ctx.mode !== "tui") {
+    ctx.ui.notify("/toggle-skills requires terminal interactive mode", "error");
     return;
   }
 
-  let skills: SkillRecord[];
-  try {
-    skills = await deps.inventory.load(ctx.cwd);
-  } catch (error) {
-    ctx.ui.notify(
-      `Pi Skill Toggle failed to scan skills: ${error instanceof Error ? error.message : String(error)}`,
-      "error",
-    );
-    return;
-  }
-
+  const skills = ctx.getSystemPromptOptions().skills ?? [];
   if (skills.length === 0) {
-    ctx.ui.notify(
-      "Pi Skill Toggle: no skills found in global, user, or project skill directories",
-      "info",
-    );
+    ctx.ui.notify("Pi Skill Toggle: no loaded skills", "info");
     return;
   }
 
-  const result = await showSkillToggleUi(ctx, skills);
+  let repository: string;
+  let choices: SkillChoice[];
+  try {
+    repository = await findRepositoryRoot(ctx.cwd);
+    const state = await store.load(repository);
+    choices = skills.map((skill) => ({
+      skill,
+      modelEnabled: effectiveModelEnabled(skill, state.overrides),
+    }));
+  } catch (error) {
+    ctx.ui.notify(`Pi Skill Toggle: ${message(error)}`, "error");
+    return;
+  }
+
+  const result = await showSkillToggleUi(ctx, repository, choices);
   if (result.action !== "apply") return;
 
-  let changes: SkillChange[];
+  const changed = Object.entries(result.changes);
+  if (changed.length === 0) {
+    ctx.ui.notify("Pi Skill Toggle: no changes to save", "info");
+    return;
+  }
+
   try {
-    changes = await deps.planner.plan(skills, result.drafts);
+    await store.update(repository, (state) => applyChanges(state, skills, result.changes));
   } catch (error) {
-    ctx.ui.notify(
-      `Pi Skill Toggle failed to plan changes: ${error instanceof Error ? error.message : String(error)}`,
-      "error",
-    );
+    ctx.ui.notify(`Pi Skill Toggle could not save: ${message(error)}`, "error");
     return;
   }
 
-  if (changes.length === 0) {
-    ctx.ui.notify("Pi Skill Toggle: no changes to apply", "info");
-    return;
-  }
-
-  const applied = await deps.writer.apply(changes);
-  ctx.ui.notify(formatApplyResult(applied), applied.errors.length > 0 ? "warning" : "info");
-
-  if (applied.applied.length > 0) {
-    await ctx.reload();
-  }
+  ctx.ui.notify(formatResult(changed, skills), "info");
 }
 
-function formatApplyResult(result: ApplyResult): string {
+function formatResult(changed: Array<[string, boolean]>, skills: Skill[]): string {
+  const skillNames = new Set(skills.map((skill) => skill.name));
+  const applied = changed.filter(([name]) => skillNames.has(name));
   const lines = [
-    `Pi Skill Toggle applied ${result.applied.length} change${result.applied.length === 1 ? "" : "s"}.`,
+    `Pi Skill Toggle updated ${applied.length} skill${applied.length === 1 ? "" : "s"} for this repository.`,
   ];
-  for (const change of result.applied.slice(0, 6)) {
-    lines.push(`- ${change.skill.name}: ${change.from} → ${change.to}`);
+  for (const [name, enabled] of applied.slice(0, 6)) {
+    lines.push(`- ${name}: ${enabled ? "model-visible" : "manual-only"}`);
   }
-  if (result.applied.length > 6) {
-    lines.push(`- … ${result.applied.length - 6} more`);
-  }
-  if (result.errors.length > 0) {
-    lines.push(`Errors/skipped: ${result.errors.length}`);
-    for (const error of result.errors.slice(0, 4)) {
-      lines.push(`- ${error.message}`);
-    }
-  }
-  if (result.applied.length > 0) {
-    lines.push("Reloaded skills, prompts, extensions, and themes.");
-  }
+  if (applied.length > 6) lines.push(`- … ${applied.length - 6} more`);
+  lines.push("Applies on the next model turn; /skill:<name> remains available.");
   return lines.join("\n");
+}
+
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

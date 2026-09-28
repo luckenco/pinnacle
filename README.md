@@ -9,7 +9,7 @@ Personal Pi package for extensions, skills, prompts, and themes.
 - [`git-interceptor`](extensions/git-interceptor.ts): Prevents Git editor hangs and blocks agents from bypassing hooks with `--no-verify`.
 - [`notify`](extensions/notify.ts): Sends an OSC 777 desktop notification when an agent finishes and waits for input.
 - [`session-breakdown`](extensions/session-breakdown.ts): Adds `/session-breakdown` for interactive 7/30/90-day and 1-year (365-day) session, token, model, and cost summaries.
-- [`skill-toggle`](extensions/skill-toggle/): Adds `/toggle-skills` to switch skills between agent-invocable and manual-only modes.
+- [`skill-toggle`](extensions/skill-toggle/): Adds `/toggle-skills` to choose, per repository, which loaded skills are visible to the model while keeping `/skill:<name>` commands available.
 - [`subagent`](extensions/subagent/): Dispatches self-contained single, parallel, or chained tasks in separate Pi processes.
 - [`subagent-models`](extensions/subagent-models/): Adds `/subagent-models` and resolves subagent eye and hand roles with explicit reasoning levels.
 - [`uv`](extensions/uv.ts): Replaces the Bash tool with one that redirects Python, pip, and Poetry workflows through `uv`.

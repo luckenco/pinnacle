@@ -1,16 +1,17 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, type TUI, visibleWidth } from "@earendil-works/pi-tui";
-import { formatSourceKind } from "../inventory/classifier";
-import type { SkillInvocationMode, SkillRecord, SkillToggleUiResult } from "../types";
+import type { SkillChoice, SkillToggleUiResult } from "../types";
 import { bottomBorder, combineColumns, divider, fit, frameLine, topBorder } from "./render";
-import { filterSkills, modeLabel, toggleMode } from "./view-model";
+import { filterSkills, modeLabel } from "./view-model";
 
 export async function showSkillToggleUi(
   ctx: ExtensionContext,
-  skills: SkillRecord[],
+  repository: string,
+  choices: SkillChoice[],
 ): Promise<SkillToggleUiResult> {
   return ctx.ui.custom<SkillToggleUiResult>(
-    (tui, theme, _keybindings, done) => new SkillToggleOverlay(tui, theme, skills, done),
+    (tui, theme, _keybindings, done) =>
+      new SkillToggleOverlay(tui, theme, repository, choices, done),
     {
       overlay: true,
       overlayOptions: {
@@ -24,27 +25,28 @@ export async function showSkillToggleUi(
 }
 
 class SkillToggleOverlay {
-  private readonly desired = new Map<string, SkillInvocationMode>();
+  private readonly desired = new Map<string, boolean>();
   private search = "";
   private selectedIndex = 0;
 
   constructor(
     private readonly tui: TUI,
     private readonly theme: Theme,
-    private readonly skills: SkillRecord[],
+    private readonly repository: string,
+    private readonly choices: SkillChoice[],
     private readonly done: (result: SkillToggleUiResult) => void,
   ) {
-    for (const skill of skills) this.desired.set(skill.id, skill.mode);
+    for (const choice of choices) this.desired.set(choice.skill.name, choice.modelEnabled);
   }
 
   handleInput(data: string): void {
     if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
-      this.done({ action: "cancel", drafts: this.getDrafts() });
+      this.done({ action: "cancel", changes: {} });
       return;
     }
 
     if (matchesKey(data, Key.ctrl("s"))) {
-      this.done({ action: "apply", drafts: this.getDrafts() });
+      this.done({ action: "apply", changes: this.getChanges() });
       return;
     }
 
@@ -58,10 +60,11 @@ class SkillToggleOverlay {
       return;
     }
 
-    if (matchesKey(data, Key.space)) {
-      const selected = this.getSelectedSkill();
-      if (selected?.editable) {
-        this.desired.set(selected.id, toggleMode(this.desired.get(selected.id) ?? selected.mode));
+    if (matchesKey(data, Key.enter)) {
+      const selected = this.getSelectedChoice();
+      if (selected) {
+        const name = selected.skill.name;
+        this.desired.set(name, !(this.desired.get(name) ?? selected.modelEnabled));
         this.tui.requestRender();
       }
       return;
@@ -107,10 +110,14 @@ class SkillToggleOverlay {
     const footer = [
       frameLine(
         this.theme,
-        this.theme.fg("dim", "type search • ↑↓ move • space toggle • ctrl+s apply + reload"),
+        this.theme.fg("dim", "type search • ↑↓ move • enter toggle • ctrl+s save"),
         innerWidth,
       ),
-      frameLine(this.theme, this.theme.fg("dim", "esc cancel"), innerWidth),
+      frameLine(
+        this.theme,
+        this.theme.fg("dim", "checked = visible to model • esc cancel"),
+        innerWidth,
+      ),
     ];
 
     return [
@@ -129,19 +136,15 @@ class SkillToggleOverlay {
 
   private renderHeader(innerWidth: number): string {
     const title = this.theme.fg("accent", this.theme.bold("Pi Skill Toggle"));
-    const changed = this.getChangedCount();
-    const editable = this.skills.filter((skill) => skill.editable).length;
-    const summary = this.theme.fg(
-      "muted",
-      `${this.skills.length} skills • ${editable} editable • ${changed} changed`,
-    );
+    const changed = Object.keys(this.getChanges()).length;
+    const summary = this.theme.fg("muted", `${this.choices.length} skills • ${changed} changed`);
     const gap = Math.max(1, innerWidth - visibleWidth(title) - visibleWidth(summary));
     return `${title}${" ".repeat(gap)}${summary}`;
   }
 
   private renderList(width: number, height: number): string[] {
     const lines: string[] = [];
-    const filtered = this.getFilteredSkills();
+    const filtered = this.getFilteredChoices();
 
     if (filtered.length === 0) {
       lines.push(this.theme.fg("dim", "No matching skills"));
@@ -160,26 +163,22 @@ class SkillToggleOverlay {
     const end = Math.min(filtered.length, start + visibleCount);
 
     for (let i = start; i < end; i += 1) {
-      const skill = filtered[i];
-      if (!skill) continue;
-      const desired = this.desired.get(skill.id) ?? skill.mode;
+      const choice = filtered[i];
+      if (!choice) continue;
+      const desired = this.desired.get(choice.skill.name) ?? choice.modelEnabled;
       const selected = i === this.selectedIndex;
-      const changed = desired !== skill.mode;
+      const changed = desired !== choice.modelEnabled;
       const marker = selected ? "›" : " ";
-      const box = desired === "manual-only" ? "◼" : "□";
-      const readonly = skill.editable ? "" : this.theme.fg("warning", " read-only");
+      const box = desired ? "◼" : "□";
       const changedMark = changed ? this.theme.fg("accent", " *") : "";
-      const label = `${marker} ${box} ${skill.name}${changedMark}${readonly}`;
+      const label = `${marker} ${box} ${choice.skill.name}${changedMark}`;
       lines.push(
         selected ? this.theme.fg("accent", this.theme.bold(fit(label, width))) : fit(label, width),
       );
       lines.push(
         this.theme.fg(
           "dim",
-          fit(
-            `    ${modeLabel(desired)} — ${shorten(skill.description || "No description", width - 4)}`,
-            width,
-          ),
+          fit(`    ${modeLabel(desired)} — ${shorten(choice.skill.description, width - 4)}`, width),
         ),
       );
     }
@@ -188,76 +187,60 @@ class SkillToggleOverlay {
   }
 
   private renderDetails(width: number, height: number): string[] {
-    const skill = this.getSelectedSkill();
+    const choice = this.getSelectedChoice();
     const lines: string[] = [];
-    if (!skill) {
+    if (!choice) {
       lines.push(this.theme.fg("dim", "No skill selected"));
       return pad(lines, height);
     }
 
-    const desired = this.desired.get(skill.id) ?? skill.mode;
+    const { skill } = choice;
+    const desired = this.desired.get(skill.name) ?? choice.modelEnabled;
+    const sourceDefault = !skill.disableModelInvocation;
     lines.push(this.theme.fg("accent", this.theme.bold(skill.name)));
     lines.push("");
-    lines.push(`${this.theme.fg("muted", "Current:")} ${modeLabel(skill.mode)}`);
+    lines.push(`${this.theme.fg("muted", "Current:")} ${modeLabel(choice.modelEnabled)}`);
     lines.push(
-      `${this.theme.fg("muted", "Desired:")} ${modeLabel(desired)}${desired !== skill.mode ? this.theme.fg("accent", " (changed)") : ""}`,
+      `${this.theme.fg("muted", "Desired:")} ${modeLabel(desired)}${desired !== choice.modelEnabled ? this.theme.fg("accent", " (changed)") : ""}`,
     );
-    lines.push(`${this.theme.fg("muted", "Source:")} ${formatSourceKind(skill.source.kind)}`);
-    lines.push(`${this.theme.fg("muted", "Root:")} ${skill.source.root}`);
-    lines.push(
-      `${this.theme.fg("muted", "Editable:")} ${skill.editable ? "yes" : this.theme.fg("warning", "no")}`,
-    );
+    lines.push(`${this.theme.fg("muted", "Skill default:")} ${modeLabel(sourceDefault)}`);
+    lines.push(`${this.theme.fg("muted", "Scope:")} ${skill.sourceInfo.scope}`);
+    lines.push(`${this.theme.fg("muted", "Source:")} ${skill.sourceInfo.source}`);
+    lines.push("");
+    lines.push(this.theme.fg("muted", "Repository:"));
+    lines.push(...wrap(this.repository, width));
     lines.push("");
     lines.push(this.theme.fg("muted", "Path:"));
     lines.push(...wrap(skill.filePath, width));
     lines.push("");
     lines.push(this.theme.fg("muted", "Description:"));
-    lines.push(...wrap(skill.description || "(missing)", width));
-
-    if (skill.diagnostics.length > 0) {
-      lines.push("");
-      lines.push(this.theme.fg("muted", "Diagnostics:"));
-      for (const diagnostic of skill.diagnostics.slice(0, 4)) {
-        const color =
-          diagnostic.severity === "error"
-            ? "error"
-            : diagnostic.severity === "warning"
-              ? "warning"
-              : "dim";
-        lines.push(
-          ...wrap(`- ${diagnostic.message}`, width).map((line) => this.theme.fg(color, line)),
-        );
-      }
-    }
+    lines.push(...wrap(skill.description, width));
 
     return pad(lines, height);
   }
 
   private moveSelection(delta: number): void {
-    const filtered = this.getFilteredSkills();
+    const filtered = this.getFilteredChoices();
     if (filtered.length === 0) return;
     this.selectedIndex = clamp(this.selectedIndex + delta, 0, filtered.length - 1);
     this.tui.requestRender();
   }
 
-  private getFilteredSkills(): SkillRecord[] {
-    return filterSkills(this.skills, this.search);
+  private getFilteredChoices(): SkillChoice[] {
+    return filterSkills(this.choices, this.search);
   }
 
-  private getSelectedSkill(): SkillRecord | undefined {
-    return this.getFilteredSkills()[this.selectedIndex];
+  private getSelectedChoice(): SkillChoice | undefined {
+    return this.getFilteredChoices()[this.selectedIndex];
   }
 
-  private getDrafts() {
-    return this.skills.map((skill) => ({
-      skill,
-      desiredMode: this.desired.get(skill.id) ?? skill.mode,
-    }));
-  }
-
-  private getChangedCount(): number {
-    return this.skills.filter((skill) => (this.desired.get(skill.id) ?? skill.mode) !== skill.mode)
-      .length;
+  private getChanges(): Record<string, boolean> {
+    const changes: Record<string, boolean> = {};
+    for (const choice of this.choices) {
+      const desired = this.desired.get(choice.skill.name) ?? choice.modelEnabled;
+      if (desired !== choice.modelEnabled) changes[choice.skill.name] = desired;
+    }
+    return changes;
   }
 
   private getPanelHeight(): number {

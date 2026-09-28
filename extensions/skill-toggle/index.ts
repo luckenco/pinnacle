@@ -1,26 +1,32 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { DefaultSkillTogglePlanner } from "./apply/planner";
-import { AtomicSkillChangeWriter } from "./apply/writer";
+import { type ExtensionAPI, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { runToggleSkillsCommand } from "./command";
-import { DefaultSkillLocator } from "./discovery/skill-locator";
-import { SimpleFrontmatterCodec } from "./frontmatter/parser";
-import { MinimalFrontmatterPatcher } from "./frontmatter/patcher";
-import { DefaultSkillInventory } from "./inventory/loader";
-import { NodeFileSystem } from "./ports/fs";
+import { findRepositoryRoot } from "./repository";
+import { applySkillOverrides, SkillToggleStore } from "./state";
 
-export default function piSkillToggle(pi: ExtensionAPI) {
-  const fs = new NodeFileSystem();
-  const codec = new SimpleFrontmatterCodec();
-  const patcher = new MinimalFrontmatterPatcher();
-  const locator = new DefaultSkillLocator(fs);
-  const inventory = new DefaultSkillInventory(locator, fs, codec);
-  const planner = new DefaultSkillTogglePlanner(fs, codec, patcher);
-  const writer = new AtomicSkillChangeWriter(fs);
+export default function piSkillToggle(pi: ExtensionAPI, agentDir = getAgentDir()) {
+  const store = new SkillToggleStore(agentDir);
+
+  pi.on("before_agent_start", async (event, ctx) => {
+    try {
+      const repository = await findRepositoryRoot(ctx.cwd);
+      const state = await store.load(repository);
+      event.systemPromptOptions.skills = applySkillOverrides(
+        event.systemPromptOptions.skills,
+        state.overrides,
+      );
+    } catch (error) {
+      ctx.ui.notify(`Pi Skill Toggle: ${message(error)}`, "warning");
+    }
+  });
 
   pi.registerCommand("toggle-skills", {
-    description: "Toggle whether skills are agent-invocable or manual-only",
+    description: "Choose which loaded skills are visible to the model in this repository",
     handler: async (_args, ctx) => {
-      await runToggleSkillsCommand(ctx, { inventory, planner, writer });
+      await runToggleSkillsCommand(ctx, store);
     },
   });
+}
+
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
