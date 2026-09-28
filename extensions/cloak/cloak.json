@@ -39,7 +39,7 @@
       ]
     },
     {
-      "filePattern": ["~/.pi/agent/auth.json", "**/.pi/agent/auth.json", "**/auth.json"],
+      "filePattern": "**/auth.json",
       "cloakPattern": [
         {
           "pattern": "(\\\"(?:token|access|refresh|accessToken|refreshToken|apiKey|secret|password|clientSecret|idToken|sessionToken|authorization)\\\"\\s*:\\s*\\\")[^\\\"]+",

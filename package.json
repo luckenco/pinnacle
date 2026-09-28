@@ -11,6 +11,9 @@
   ],
   "files": [
     "extensions",
+    "!extensions/**/*.test.ts",
+    "!extensions/**/tests",
+    "intercepted-commands",
     "skills",
     "prompts",
     "themes",
