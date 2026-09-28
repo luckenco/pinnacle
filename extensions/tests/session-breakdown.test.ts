@@ -55,3 +55,71 @@ test("an empty selected range renders an empty model palette", () => {
   assert.ok(output.includes("█ other"));
   assert.ok(output.includes("(no model data found)"));
 });
+
+test("cost mode renders daily spend and cost-weighted model colors", () => {
+  const range = buildRangeAgg(7, new Date(2026, 8, 28));
+  const expensive = "test/expensive";
+  const cheap = "test/cheap";
+  range.sessions = 2;
+  range.totalCost = 16;
+  range.modelCost.set(expensive, 8);
+  range.modelCost.set(cheap, 8);
+
+  const expensiveDay = range.days[0];
+  expensiveDay.sessions = 1;
+  expensiveDay.totalCost = 8;
+  expensiveDay.costByModel.set(expensive, 8);
+
+  const cheapDay = range.days[1];
+  cheapDay.sessions = 1;
+  cheapDay.totalCost = 8;
+  cheapDay.costByModel.set(cheap, 8);
+
+  const component = new BreakdownComponent(
+    { ranges: new Map([[7, range]]) },
+    { requestRender() {} } as TUI,
+    () => {},
+  );
+  selectCost(component);
+
+  const lines = component.render(200);
+  const output = stripVTControlCharacters(lines.join("\n"));
+  assert.ok(output.includes("[cost]"));
+  assert.ok(output.includes("(graph: cost/day)"));
+  assert.match(output, /test\/expensive\s+\$8\.00\s+50%/);
+  assert.match(output, /test\/cheap\s+\$8\.00\s+50%/);
+  assert.equal(lines.join("\n").split("\x1b[38;2;64;196;99m").length - 1, 2);
+  assert.equal(lines.join("\n").split("\x1b[38;2;47;129;247m").length - 1, 2);
+});
+
+test("cost mode falls back when the selected range has no cost data", () => {
+  const range = buildRangeAgg(7, new Date(2026, 8, 28));
+  const model = "test/model";
+  range.sessions = 1;
+  range.totalTokens = 100;
+  range.modelTokens.set(model, 100);
+  const day = range.days[0];
+  day.sessions = 1;
+  day.tokens = 100;
+  day.tokensByModel.set(model, 100);
+
+  const component = new BreakdownComponent(
+    { ranges: new Map([[7, range]]) },
+    { requestRender() {} } as TUI,
+    () => {},
+  );
+  selectCost(component);
+
+  const lines = component.render(100);
+  const output = stripVTControlCharacters(lines.join("\n"));
+  assert.ok(output.includes("[cost]"));
+  assert.ok(output.includes("(graph: tokens/day)"));
+  assert.equal(lines.join("\n").split("\x1b[38;2;64;196;99m").length - 1, 2);
+});
+
+function selectCost(component: BreakdownComponent): void {
+  component.handleInput("1");
+  component.handleInput("t");
+  component.handleInput("t");
+  component.handleInput("t");
+}

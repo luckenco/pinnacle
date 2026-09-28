@@ -85,7 +85,7 @@ const SESSION_ROOT = path.join(os.homedir(), ".pi", "agent", "sessions");
 const RANGE_DAYS = [7, 30, 90, 365] as const;
 const MAX_RANGE_DAYS = Math.max(...RANGE_DAYS);
 
-type MeasurementMode = "sessions" | "messages" | "tokens";
+type MeasurementMode = "sessions" | "messages" | "tokens" | "cost";
 
 type BreakdownProgressPhase = "scan" | "parse" | "finalize";
 
@@ -562,6 +562,7 @@ function dayMixedColor(
     if (day.messages > 0) map = day.messagesByModel;
     if (day.tokens > 0) map = day.tokensByModel;
   }
+  if (mode === "cost" && day.totalCost > 0) map = day.costByModel;
 
   for (const [mk, w] of map.entries()) {
     const c = modelColors.get(mk);
@@ -575,24 +576,29 @@ function dayMixedColor(
 function graphMetricForRange(
   range: RangeAgg,
   mode: MeasurementMode,
-): { kind: "sessions" | "messages" | "tokens"; max: number; denom: number } {
+): { kind: MeasurementMode; denom: number } {
+  if (mode === "cost") {
+    const maxCost = Math.max(0, ...range.days.map((d) => d.totalCost));
+    if (maxCost > 0) return { kind: "cost", denom: Math.log1p(maxCost) };
+    mode = "tokens";
+  }
+
   if (mode === "tokens") {
     const maxTokens = Math.max(0, ...range.days.map((d) => d.tokens));
-    if (maxTokens > 0) return { kind: "tokens", max: maxTokens, denom: Math.log1p(maxTokens) };
+    if (maxTokens > 0) return { kind: "tokens", denom: Math.log1p(maxTokens) };
     // fall back if tokens aren't available
     mode = "messages";
   }
 
   if (mode === "messages") {
     const maxMessages = Math.max(0, ...range.days.map((d) => d.messages));
-    if (maxMessages > 0)
-      return { kind: "messages", max: maxMessages, denom: Math.log1p(maxMessages) };
+    if (maxMessages > 0) return { kind: "messages", denom: Math.log1p(maxMessages) };
     // fall back if messages aren't available
     mode = "sessions";
   }
 
   const maxSessions = Math.max(0, ...range.days.map((d) => d.sessions));
-  return { kind: "sessions", max: maxSessions, denom: Math.log1p(maxSessions) };
+  return { kind: "sessions", denom: Math.log1p(maxSessions) };
 }
 
 function weeksForRange(range: RangeAgg): number {
@@ -652,14 +658,14 @@ function renderGraphLines(
 
       const key = toLocalDayKey(cellDate);
       const day = range.dayByKey.get(key);
-      const value = day?.[metric.kind] ?? 0;
+      const value = day ? dayMetricValue(day, metric.kind) : 0;
 
       if (!day || value <= 0) {
         line += ansiFg(EMPTY_CELL_BG, block) + colGap;
         continue;
       }
 
-      const hue = dayMixedColor(day, modelColors, otherColor, mode);
+      const hue = dayMixedColor(day, modelColors, otherColor, metric.kind);
       let t = denom > 0 ? Math.log1p(value) / denom : 0;
       t = clamp01(t);
       const minVisible = 0.2;
@@ -672,6 +678,11 @@ function renderGraphLines(
   }
 
   return lines;
+}
+
+function dayMetricValue(day: DayAgg, mode: MeasurementMode): number {
+  if (mode === "cost") return day.totalCost;
+  return day[mode];
 }
 
 function displayModelName(modelKey: string): string {
@@ -703,7 +714,10 @@ function renderModelTable(range: RangeAgg, mode: MeasurementMode, maxRows = 8): 
   let total = 0;
   const label = kind;
 
-  if (kind === "tokens") {
+  if (kind === "cost") {
+    perModel = range.modelCost;
+    total = range.totalCost;
+  } else if (kind === "tokens") {
     perModel = range.modelTokens;
     total = range.totalTokens;
   } else if (kind === "messages") {
@@ -717,24 +731,35 @@ function renderModelTable(range: RangeAgg, mode: MeasurementMode, maxRows = 8): 
   const sorted = sortMapByValueDesc(perModel);
   const rows = sorted.slice(0, maxRows);
 
-  const valueWidth = kind === "tokens" ? 10 : 8;
+  const valueWidth = kind === "tokens" || kind === "cost" ? 10 : 8;
   const modelWidth = Math.min(52, Math.max("model".length, ...rows.map((r) => r.key.length)));
 
   const lines: string[] = [];
-  lines.push(
-    `${padRight("model", modelWidth)}  ${padLeft(label, valueWidth)}  ${padLeft("cost", 10)}  ${padLeft("share", 6)}`,
-  );
-  lines.push(
-    `${"-".repeat(modelWidth)}  ${"-".repeat(valueWidth)}  ${"-".repeat(10)}  ${"-".repeat(6)}`,
-  );
+  if (kind === "cost") {
+    lines.push(
+      `${padRight("model", modelWidth)}  ${padLeft(label, valueWidth)}  ${padLeft("share", 6)}`,
+    );
+    lines.push(`${"-".repeat(modelWidth)}  ${"-".repeat(valueWidth)}  ${"-".repeat(6)}`);
+  } else {
+    lines.push(
+      `${padRight("model", modelWidth)}  ${padLeft(label, valueWidth)}  ${padLeft("cost", 10)}  ${padLeft("share", 6)}`,
+    );
+    lines.push(
+      `${"-".repeat(modelWidth)}  ${"-".repeat(valueWidth)}  ${"-".repeat(10)}  ${"-".repeat(6)}`,
+    );
+  }
 
   for (const r of rows) {
     const value = perModel.get(r.key) ?? 0;
-    const cost = range.modelCost.get(r.key) ?? 0;
     const share = total > 0 ? `${Math.round((value / total) * 100)}%` : "0%";
-    lines.push(
-      `${padRight(r.key.slice(0, modelWidth), modelWidth)}  ${padLeft(formatCount(value), valueWidth)}  ${padLeft(formatUsd(cost), 10)}  ${padLeft(share, 6)}`,
-    );
+    const valueText = kind === "cost" ? formatUsd(value) : formatCount(value);
+    const row = `${padRight(r.key.slice(0, modelWidth), modelWidth)}  ${padLeft(valueText, valueWidth)}`;
+    if (kind === "cost") {
+      lines.push(`${row}  ${padLeft(share, 6)}`);
+      continue;
+    }
+    const cost = range.modelCost.get(r.key) ?? 0;
+    lines.push(`${row}  ${padLeft(formatUsd(cost), 10)}  ${padLeft(share, 6)}`);
   }
 
   if (sorted.length === 0) {
@@ -847,7 +872,7 @@ export class BreakdownComponent implements Component {
       matchesKey(data, Key.shift("tab")) ||
       data.toLowerCase() === "t"
     ) {
-      const order: MeasurementMode[] = ["sessions", "messages", "tokens"];
+      const order: MeasurementMode[] = ["sessions", "messages", "tokens", "cost"];
       const idx = Math.max(0, order.indexOf(this.measurement));
       const dir = matchesKey(data, Key.shift("tab")) ? -1 : 1;
       this.measurement = order[(idx + order.length + dir) % order.length] ?? "sessions";
@@ -892,7 +917,7 @@ export class BreakdownComponent implements Component {
 
     const header =
       `${bold("Session breakdown")}  ${RANGE_DAYS.map(tab).join(" ")}  ` +
-      `${metricTab("sessions", "sess")} ${metricTab("messages", "msg")} ${metricTab("tokens", "tok")}`;
+      `${metricTab("sessions", "sess")} ${metricTab("messages", "msg")} ${metricTab("tokens", "tok")} ${metricTab("cost", "cost")}`;
 
     const palette = choosePalette(range);
     const legendTitle = dim(`Top models (${selectedDays}d palette):`);
