@@ -49,6 +49,13 @@ Subagent tasks request `role: "eye"` or `role: "hand"`; `eyeIndex` can select a 
 - [`doom-peacock`](themes/doom-peacock.json), [`gruvbox-dark-hard`](themes/gruvbox-dark-hard.json), and [`gruvbox-dark`](themes/gruvbox-dark.json): Bundled Pi themes.
 - [`prompts/`](prompts/): Reserved for package prompt templates and currently empty.
 
+## Lint and format tooling
+
+- [`tools/oxlint/anti-slop/`](tools/oxlint/anti-slop/): Vendors the anti-slop Oxlint rules, including the optional Effect rules and their upstream license and provenance.
+- [`.oxlintrc.json`](.oxlintrc.json): Enables the generic anti-slop rules and ignores installed agent assets and vendored rules.
+- [`.oxfmtrc.json`](.oxfmtrc.json): Configures Oxfmt and excludes vendored rules, agent assets, and Markdown documentation.
+- `bun run lint` runs Oxlint; `bun run format` formats with Oxfmt; `bun run check` checks Oxfmt formatting, Oxlint, and TypeScript.
+
 ## Origins
 
 Pinnacle regularly draws inspiration from [dmmulroy's dotfiles](https://github.com/dmmulroy/.dotfiles/tree/main) and [Cursor's pstack](https://github.com/cursor/plugins/tree/main/pstack). Some extensions retain more specific source links alongside their code. The workflow skills adapt selected pstack material for Pi; the original is by Lauren Tan and MIT-licensed, with its license preserved in [skills/PSTACK-LICENSE](skills/PSTACK-LICENSE). This package does not install pstack or change existing skills. `create-verification-skill` writes a project-local `.agents/skills/verify-<app>/` only when explicitly invoked in that project. `hillclimb` has its own PR workflow and does not use `visual-pr`.
