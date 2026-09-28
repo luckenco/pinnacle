@@ -2,6 +2,14 @@
 
 Personal Pi package for extensions, skills, prompts, and themes.
 
+Try Pinnacle without adding it to your Pi settings:
+
+```bash
+pi -e git:github.com/luckenco/pinnacle
+```
+
+This loads Pinnacle for this run. Your existing Pi configuration still applies.
+
 ## Extensions
 
 - [`cloak`](extensions/cloak/): Masks configured secrets in tool results before they enter the conversation.
@@ -36,10 +44,10 @@ Personal Pi package for extensions, skills, prompts, and themes.
 
 Run `/subagent-models` to configure the models used by Pinnacle workflows:
 
-- **Eyes** are an ordered pool of one or more capable models used for exploration, design, review, judgment, and synthesis; every eye has its own explicit reasoning level, and skills consume the pool in priority order before choosing workflow-specific overflow models.
-- **Hand** is one required model used for bounded implementation work, with a separate reasoning level even when the same model is also an eye.
+- **Eyes** are an ordered pool of models for exploration, design, review, judgment, and synthesis. Each eye has its own reasoning level. Skills use the pool in order before choosing more models if needed.
+- **Hand** is the required model for bounded implementation tasks. It has its own reasoning level, even if you use the same model as an eye.
 
-Subagent tasks request `role: "eye"` or `role: "hand"`; `eyeIndex` can select a specific 1-based eye. The dispatcher validates the configured model and reasoning level before launch and fails visibly rather than silently substituting an unavailable assignment. Exact `model` overrides and parent-model inheritance remain available for direct calls and workflow overflow. Pi warns at session start until at least one eye and a hand are configured. See the [model-role guide](extensions/subagent-models/README.md) and [subagent tool guide](extensions/subagent/README.md) for details.
+Subagent tasks request `role: "eye"` or `role: "hand"`. Use `eyeIndex` to select an eye by its 1-based position. The dispatcher checks the model and reasoning level before launch and reports an error if either is unavailable. Direct calls can still specify a `model` or inherit the parent's model. Pi warns at session start until you configure at least one eye and a hand. See the [model-role guide](extensions/subagent-models/README.md) and [subagent tool guide](extensions/subagent/README.md) for details.
 
 ## Scripts and supporting assets
 
@@ -58,4 +66,6 @@ Subagent tasks request `role: "eye"` or `role: "hand"`; `eyeIndex` can select a 
 
 ## Origins
 
-Pinnacle regularly draws inspiration from [dmmulroy's dotfiles](https://github.com/dmmulroy/.dotfiles/tree/main) and [Cursor's pstack](https://github.com/cursor/plugins/tree/main/pstack). Some extensions retain more specific source links alongside their code. The workflow skills adapt selected pstack material for Pi; the original is by Lauren Tan and MIT-licensed, with its license preserved in [skills/PSTACK-LICENSE](skills/PSTACK-LICENSE). This package does not install pstack or change existing skills. `create-verification-skill` writes a project-local `.agents/skills/verify-<app>/` only when explicitly invoked in that project. `hillclimb` has its own PR workflow and does not use `visual-pr`.
+Pinnacle borrows ideas from [dmmulroy's dotfiles](https://github.com/dmmulroy/.dotfiles/tree/main) and [Cursor's pstack](https://github.com/cursor/plugins/tree/main/pstack). Some extensions link to their specific sources in the code. The workflow skills adapt selected pstack material for Pi. Lauren Tan wrote the original under the MIT license, preserved in [skills/PSTACK-LICENSE](skills/PSTACK-LICENSE).
+
+This package does not install pstack or change existing skills. `create-verification-skill` writes a project-local `.agents/skills/verify-<app>/` only when you invoke it in that project. `hillclimb` has its own PR workflow and does not use `visual-pr`.
