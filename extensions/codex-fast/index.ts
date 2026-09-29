@@ -6,12 +6,8 @@ import {
   InMemoryCredentialStore,
   type Model,
   type Api,
-} from "@earendil-works/pi-ai";
-import {
-  stream as streamCodex,
   type OpenAICodexResponsesOptions,
-} from "@earendil-works/pi-ai/api/openai-codex-responses";
-import { buildBaseOptions } from "@earendil-works/pi-ai/api/simple-options";
+} from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import {
@@ -102,9 +98,8 @@ export default async function codexFast(pi: ExtensionAPI, agentDir = getAgentDir
       const effort = options.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
 
       // Keep the tier in options: a payload-only hook loses Pi's fallback tier pricing.
-      return streamCodex(model, context, {
-        ...buildBaseOptions(model, context, options, options.apiKey),
-        toolChoice: options.toolChoice,
+      return provider.stream(model, context, {
+        ...options,
         reasoningEffort: effort === "off" ? undefined : effort,
         serviceTier: "priority",
       });
