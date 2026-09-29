@@ -148,6 +148,35 @@ test("a task inherits the parent's model/thinking and defaults to read-only tool
   assert.match(text(result), /^inspect ✓\n/);
   assert.ok(Value.Check(resultSchema, result.details));
   assert.equal(result.details.results[0].usage.turns, 1);
+  assert.deepEqual(result.usage, {
+    input: 1,
+    output: 2,
+    cacheRead: 3,
+    cacheWrite: 4,
+    reasoning: 1,
+    totalTokens: 10,
+    cost: {
+      input: 0.001,
+      output: 0.002,
+      cacheRead: 0.003,
+      cacheWrite: 0.004,
+      total: 0.01,
+    },
+  });
+});
+
+test("tool-reported child usage is included in the parent total", async () => {
+  const result = await tool.execute(
+    "nested-usage",
+    { task: { task: "tool usage" } },
+    undefined,
+    undefined,
+    ctx,
+  );
+
+  assert.equal(result.usage?.totalTokens, 30);
+  assert.equal(result.usage?.cost.total, 0.03);
+  assert.equal(result.usage?.cacheRead, 18);
 });
 
 test("per-task model, tool permissions, and workspace override the defaults", async () => {

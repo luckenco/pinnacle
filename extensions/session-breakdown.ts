@@ -114,7 +114,12 @@ const fieldsSchema = Type.Object({
   provider: Type.Optional(Type.Unknown()),
   model: Type.Optional(Type.Unknown()),
   modelId: Type.Optional(Type.Unknown()),
+  role: Type.Optional(Type.Unknown()),
+  toolName: Type.Optional(Type.Unknown()),
   message: Type.Optional(Type.Unknown()),
+  messages: Type.Optional(Type.Unknown()),
+  details: Type.Optional(Type.Unknown()),
+  results: Type.Optional(Type.Unknown()),
   usage: Type.Optional(Type.Unknown()),
   cost: Type.Optional(Type.Unknown()),
   total: Type.Optional(Type.Unknown()),
@@ -136,6 +141,8 @@ const fieldsSchema = Type.Object({
 const stringSchema = Type.String();
 
 const numericSchema = Type.Union([Type.Number(), Type.String()]);
+
+const arraySchema = Type.Array(Type.Unknown());
 
 // Dark-ish background and empty cell color (close to GitHub dark)
 const DEFAULT_BG: RGB = { r: 13, g: 17, b: 23 };
@@ -353,6 +360,47 @@ function extractTokensTotal(usage: Static<typeof fieldsSchema> | null): number {
   );
 }
 
+interface NestedSubagentMessage {
+  message: Static<typeof fieldsSchema>;
+  model: ModelKey | null;
+}
+
+function nestedSubagentMessages(obj: Static<typeof fieldsSchema>): NestedSubagentMessage[] {
+  const message = Value.Check(fieldsSchema, obj.message) ? obj.message : null;
+
+  if (message?.role !== "toolResult" || message.toolName !== "subagent") return [];
+  const details = Value.Check(fieldsSchema, message.details) ? message.details : null;
+  const results = Value.Check(arraySchema, details?.results) ? details.results : [];
+  const nested: NestedSubagentMessage[] = [];
+
+  for (const value of results) {
+    if (!Value.Check(fieldsSchema, value)) continue;
+    const model = Value.Check(stringSchema, value.model) ? value.model : null;
+    const messages = Value.Check(arraySchema, value.messages) ? value.messages : [];
+
+    for (const childMessage of messages) {
+      if (Value.Check(fieldsSchema, childMessage)) {
+        nested.push({ message: childMessage, model });
+      }
+    }
+  }
+
+  return nested;
+}
+
+function usageTotals(messages: NestedSubagentMessage[]) {
+  let tokens = 0;
+  let cost = 0;
+
+  for (const { message } of messages) {
+    const { usage } = extractProviderModelAndUsage(message);
+    tokens += extractTokensTotal(usage);
+    cost += extractCostTotal(usage);
+  }
+
+  return { tokens, cost };
+}
+
 async function walkSessionFiles(
   root: string,
   startCutoffLocal: Date,
@@ -417,7 +465,7 @@ async function walkSessionFiles(
   return out;
 }
 
-async function parseSessionFile(
+export async function parseSessionFile(
   filePath: string,
   signal?: AbortSignal,
 ): Promise<ParsedSession | null> {
@@ -432,6 +480,39 @@ async function parseSessionFile(
   const costByModel = new Map<ModelKey, number>();
   const messagesByModel = new Map<ModelKey, number>();
   const tokensByModel = new Map<ModelKey, number>();
+
+  const addUsage = (mk: ModelKey, tokenCount: number, cost: number) => {
+    if (tokenCount > 0) {
+      tokens += tokenCount;
+      tokensByModel.set(mk, (tokensByModel.get(mk) ?? 0) + tokenCount);
+    }
+
+    if (cost > 0) {
+      totalCost += cost;
+      costByModel.set(mk, (costByModel.get(mk) ?? 0) + cost);
+    }
+  };
+
+  const recordMessage = (
+    obj: Static<typeof fieldsSchema>,
+    fallbackModel?: ModelKey | null,
+    includeUsage = true,
+  ) => {
+    const { provider, model, modelId, usage } = extractProviderModelAndUsage(obj);
+
+    const mk =
+      modelKeyFromParts(provider, model) ??
+      modelKeyFromParts(provider, modelId) ??
+      fallbackModel ??
+      currentModel ??
+      "unknown";
+
+    modelsUsed.add(mk);
+    messages += 1;
+    messagesByModel.set(mk, (messagesByModel.get(mk) ?? 0) + 1);
+
+    if (includeUsage) addUsage(mk, extractTokensTotal(usage), extractCostTotal(usage));
+  };
 
   const stream = createReadStream(filePath, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
@@ -480,32 +561,29 @@ async function parseSessionFile(
       }
 
       if (obj?.type !== "message") continue;
+      const childMessages = nestedSubagentMessages(obj);
 
-      const { provider, model, modelId, usage } = extractProviderModelAndUsage(obj);
-
-      const mk =
-        modelKeyFromParts(provider, model) ??
-        modelKeyFromParts(provider, modelId) ??
-        currentModel ??
-        "unknown";
-
-      modelsUsed.add(mk);
-
-      messages += 1;
-      messagesByModel.set(mk, (messagesByModel.get(mk) ?? 0) + 1);
-
-      const tok = extractTokensTotal(usage);
-
-      if (tok > 0) {
-        tokens += tok;
-        tokensByModel.set(mk, (tokensByModel.get(mk) ?? 0) + tok);
+      if (childMessages.length === 0) {
+        recordMessage(obj);
+        continue;
       }
 
-      const cost = extractCostTotal(usage);
+      // The aggregate usage is the same spend as the detailed child messages.
+      // Use details for model attribution, then retain any missing aggregate remainder.
+      recordMessage(obj, null, false);
 
-      if (cost > 0) {
-        totalCost += cost;
-        costByModel.set(mk, (costByModel.get(mk) ?? 0) + cost);
+      for (const child of childMessages) recordMessage(child.message, child.model);
+
+      const message = Value.Check(fieldsSchema, obj.message) ? obj.message : null;
+      const aggregate = Value.Check(fieldsSchema, message?.usage) ? message.usage : null;
+      const detailed = usageTotals(childMessages);
+      const missingTokens = Math.max(0, extractTokensTotal(aggregate) - detailed.tokens);
+      const missingCost = Math.max(0, extractCostTotal(aggregate) - detailed.cost);
+
+      if (missingTokens > 0 || missingCost > 1e-12) {
+        const mk = "subagent/unknown";
+        modelsUsed.add(mk);
+        addUsage(mk, missingTokens, missingCost);
       }
     }
   } finally {

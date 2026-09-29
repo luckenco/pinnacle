@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { getSupportedThinkingLevels, type Message } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, type Message, type Usage } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
   type ExtensionContext,
@@ -351,6 +351,46 @@ function run(
   });
 }
 
+function totalUsage(results: Result[]): Usage {
+  const total: Usage = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+
+  for (const result of results) {
+    for (const message of result.messages) {
+      if (message.role !== "assistant" && message.role !== "toolResult") continue;
+      const usage = message.usage;
+
+      if (!usage) continue;
+      total.input += usage.input;
+      total.output += usage.output;
+      total.cacheRead += usage.cacheRead;
+      total.cacheWrite += usage.cacheWrite;
+      total.totalTokens += usage.totalTokens;
+      total.cost.input += usage.cost.input;
+      total.cost.output += usage.cost.output;
+      total.cost.cacheRead += usage.cost.cacheRead;
+      total.cost.cacheWrite += usage.cost.cacheWrite;
+      total.cost.total += usage.cost.total;
+
+      if (usage.cacheWrite1h !== undefined) {
+        total.cacheWrite1h = (total.cacheWrite1h ?? 0) + usage.cacheWrite1h;
+      }
+
+      if (usage.reasoning !== undefined) {
+        total.reasoning = (total.reasoning ?? 0) + usage.reasoning;
+      }
+    }
+  }
+
+  return total;
+}
+
 function capped(text: string): string {
   if (Buffer.byteLength(text) <= MAX_OUTPUT_BYTES) return text;
   const bytes = Buffer.from(text);
@@ -452,8 +492,14 @@ export default function subagent(
 
       const details: Details = { mode, results };
 
+      const usage = totalUsage(results);
+
       if (mode !== "parallel")
-        return { content: [{ type: "text", text: output(results[results.length - 1]) }], details };
+        return {
+          content: [{ type: "text", text: output(results[results.length - 1]) }],
+          details,
+          usage,
+        };
       const success = results.filter((result) => !failed(result)).length;
 
       const summary = results.map(
@@ -469,6 +515,7 @@ export default function subagent(
           },
         ],
         details,
+        usage,
       };
     },
   });

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
-import { BreakdownComponent, buildRangeAgg } from "../session-breakdown";
+import { BreakdownComponent, buildRangeAgg, parseSessionFile } from "../session-breakdown";
 
 for (const width of [40, 200]) {
   test(`palette follows range changes at width ${width}`, () => {
@@ -59,6 +62,75 @@ test("an empty selected range renders an empty model palette", () => {
   assert.ok(output.includes("Top models (7d palette):"));
   assert.ok(output.includes("█ other"));
   assert.ok(output.includes("(no model data found)"));
+});
+
+test("subagent details avoid double-counting and incomplete details fall back to aggregate usage", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "session-breakdown-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const file = join(root, "2026-09-28T12-00-00-000Z_test.jsonl");
+
+  const usage = (cost: number, tokens: number) => ({
+    input: tokens,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: tokens,
+    cost: { input: cost, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
+  });
+
+  const entries = [
+    { type: "model_change", provider: "test", modelId: "parent" },
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        provider: "test",
+        model: "parent",
+        usage: usage(1, 10),
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "subagent",
+        usage: usage(3, 30),
+        details: {
+          results: [
+            {
+              model: "test/child",
+              messages: [{ role: "user" }, { role: "assistant", usage: usage(3, 30) }],
+            },
+          ],
+        },
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "subagent",
+        usage: usage(2, 20),
+        details: {
+          results: [{ model: "test/incomplete", messages: [{ role: "user" }] }],
+        },
+      },
+    },
+  ];
+
+  writeFileSync(file, entries.map((entry) => JSON.stringify(entry)).join("\n"));
+
+  const session = await parseSessionFile(file);
+  assert.ok(session);
+  assert.equal(session.messages, 6);
+  assert.equal(session.tokens, 60);
+  assert.equal(session.totalCost, 6);
+  assert.equal(session.tokensByModel.get("test/parent"), 10);
+  assert.equal(session.tokensByModel.get("test/child"), 30);
+  assert.equal(session.tokensByModel.get("subagent/unknown"), 20);
+  assert.equal(session.costByModel.get("test/parent"), 1);
+  assert.equal(session.costByModel.get("test/child"), 3);
+  assert.equal(session.costByModel.get("subagent/unknown"), 2);
 });
 
 test("cost mode renders daily spend and cost-weighted model colors", () => {
