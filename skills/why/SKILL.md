@@ -61,7 +61,7 @@ Capture this as seed context (file paths, symbols, commits, PR numbers, linked t
 
 ### Discovery
 
-Before spawning investigators, use Pi's `mcp` gateway status and tool search to list available, connected MCP servers and inspect their instructions. Do not infer availability from configuration alone. If the gateway is unavailable, record the missing categories.
+Before spawning investigators, run `pi mcp list --json` to list connected native MCP servers, then use `tool_search` to inspect their tools and instructions. Record the exact `mcp__<server>__<tool>` names each investigator may need. Do not infer availability from configuration alone. If native MCP is unavailable, record the missing categories.
 
 Map each available MCP to one evidence category:
 
@@ -77,7 +77,7 @@ Source control is available locally through `jj` or `git`; use `gh` only when au
 
 Aim for a complete **coverage map**, not a minimal one. Document the null, don't skip the search.
 
-Launch all matching investigators in one parallel `subagent` call (up to eight tasks, four concurrent). Fill seats from configured eyes in priority order with `role: "eye"`; when investigators outnumber eyes, choose whether each overflow seat inherits the parent or uses an explicit available model. Don't ask one agent to cover multiple MCPs. Give source-control investigators `tools: ["read", "grep", "find", "ls", "bash"]`. Give MCP investigators `tools: ["read", "grep", "find", "ls", "mcp"]` if the Pi child exposes the gateway; otherwise investigate those sources in the parent and record the limitation. No write tools for any investigator.
+Launch all matching investigators in one parallel `subagent` call (up to eight tasks, four concurrent). Fill seats from configured eyes in priority order with `role: "eye"`; when investigators outnumber eyes, choose whether each overflow seat inherits the parent or uses an explicit available model. Don't ask one agent to cover multiple MCPs. Give source-control investigators `tools: ["read", "grep", "find", "ls", "bash"]`. Give MCP investigators a `tools` allowlist containing `read`, `grep`, `find`, `ls`, `tool_search`, and the exact native MCP tool names recorded for that server. A child's explicit allowlist also filters `tool_search`, so naming only `tool_search` hides every MCP tool. If the child cannot expose the required tools, investigate that source in the parent and record the limitation. No write tools for any investigator.
 
 Each investigator gets:
 1. The base prompt from `references/investigator-prompt.md`

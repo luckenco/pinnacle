@@ -48,7 +48,7 @@ const Task = Type.Object({
     Type.Array(Type.String(), {
       minItems: 1,
       description:
-        "Explicit child tool allowlist; default read, grep, find, ls. Include bash/edit/write only when needed.",
+        "Explicit child tool allowlist; default read, grep, find, ls. For deferred MCP, include tool_search and each exact mcp__<server>__<tool> name.",
     }),
   ),
 });

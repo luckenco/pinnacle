@@ -4,7 +4,7 @@ Adapted from [Pi's subagent example](https://github.com/earendil-works/pi/tree/f
 
 Pinnacle's package loads the `subagent` tool when installed. To test this checkout without updating the package, use `pi -e ~/Code/pinnacle/extensions/subagent/index.ts`. Do not load both copies in one session.
 
-The child receives a fresh conversation, project instructions, and the **task brief**, but not the parent's conversation. Give it the goal, paths, criteria, and any references it must read. The default tools are `read,grep,find,ls`. Pass `tools` explicitly for Bash, editing, or MCP access. Tool lists are not a security sandbox: the process inherits local credentials, network, extensions, and filesystem access. Children exclude `subagent` from their tool list to avoid recursive dispatch.
+The child receives a fresh conversation, project instructions, and the **task brief**, but not the parent's conversation. Give it the goal, paths, criteria, and any references it must read. The default tools are `read,grep,find,ls`. Pass `tools` explicitly for Bash, editing, or MCP access. For deferred native MCP, include `tool_search` and every exact `mcp__<server>__<tool>` name the child may use; the allowlist also filters the search index. Tool lists are not a security sandbox: the process inherits local credentials, network, extensions, and filesystem access. Children exclude `subagent` from their tool list to avoid recursive dispatch.
 
 Examples of the model-callable tool input:
 
