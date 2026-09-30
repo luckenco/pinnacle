@@ -30,7 +30,7 @@ The N candidates will receive the same prompt, so the prompt is the contract.
 
 ## Phase B: Fan out
 
-Launch one parallel `subagent` call with N `tasks` entries (maximum eight, four concurrent). Each self-contained brief names the task, shared grounding paths, its own output path, and instructions to produce both artifact and short rationale. Supply `cwd` and `tools: ["read", "grep", "find", "ls", "bash", "edit", "write"]` for writers. The parent waits for all results; a tool response is not a background job.
+Launch one parallel `subagent` call with N `tasks` entries (maximum eight, four concurrent). Each self-contained brief names the task, shared grounding paths, its own output path, and instructions to produce both artifact and short rationale. Supply `cwd` and `tools: ["read", "grep", "find", "ls", "bash", "edit", "write", "codemode"]` for writers. The parent waits for all results; a tool response is not a background job.
 
 Each rationale names the alternatives the candidate considered and what it rejected.
 
