@@ -16,7 +16,7 @@ This loads Pinnacle for this run. Your existing Pi configuration still applies.
 - [`codex-fast`](extensions/codex-fast/): Adds `/fast` to persistently request priority service for OpenAI ChatGPT OAuth models and show its status.
 - [`git-interceptor`](extensions/git-interceptor.ts): Prevents Git editor hangs and blocks agents from bypassing hooks with `--no-verify`.
 - [`notify`](extensions/notify.ts): Sends an OSC 777 desktop notification when an agent finishes and waits for input.
-- [`session-breakdown`](extensions/session-breakdown.ts): Adds `/session-breakdown` for interactive 7/30/90-day and 1-year (365-day) session, token, model, and cost summaries.
+- [`session-breakdown`](extensions/session-breakdown.ts): Adds `/session-breakdown` for interactive 7/30/90-day and 1-year (365-day) session-start counts and request-dated message, token, model, and recorded-equivalent cost summaries, including compaction, branch-summary, standalone, and embedded subagent usage.
 - [`skill-toggle`](extensions/skill-toggle/): Adds `/toggle-skills` to choose, per repository, which loaded skills are visible to the model while keeping `/skill:<name>` commands available.
 - [`skills`](extensions/skills.ts): Adds `/skills` to search loaded skills by name or description and prepare a `/skill:<name>` invocation in the editor.
 - [`subagent`](extensions/subagent/): Dispatches self-contained single, parallel, or chained tasks in separate Pi processes.
@@ -62,6 +62,12 @@ StackScout can optionally provide caller/dependency evidence before dispatch and
 - [`skills/show-me-your-work/scripts/log.sh`](skills/show-me-your-work/scripts/log.sh): Appends sanitized rows to a decision log with timestamps and spreadsheet-formula protection.
 - [`doom-peacock`](themes/doom-peacock.json), [`gruvbox-dark-hard`](themes/gruvbox-dark-hard.json), and [`gruvbox-dark`](themes/gruvbox-dark.json): Bundled Pi themes.
 - [`prompts/`](prompts/): Reserved for package prompt templates and currently empty.
+
+## Session breakdown accounting
+
+Session breakdown uses local calendar days. Message timestamps take precedence over entry timestamps; undated subagent messages fall back to the tool-result date, then the session start. Child non-message usage retains its own timestamp when available; compaction completion events use their receipt time. Session counts remain starts/day. Copied entries with the same ID and entry timestamp are counted once across scanned files.
+
+Cost is recorded-equivalent usage, not an invoice. Subagent messages and non-message usage entries are reconciled against each child's aggregate before the parent aggregate; known child models are retained for missing-detail remainders. Aggregate-only remainders use the tool-result date when no timestamp remains, and only unattributable spend uses `subagent/unknown`. Missing usage cannot be reconstructed, and compaction or branch-summary usage without actual-model metadata uses the current model. Pi 0.99.1 does not emit child tree-navigation branch-summary usage to the JSON stream, so that usage cannot currently be collected.
 
 ## Lint and format tooling
 

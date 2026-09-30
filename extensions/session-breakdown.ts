@@ -36,16 +36,20 @@ import {
 
 type ModelKey = string; // `${provider}/${model}`
 
-interface ParsedSession {
-  startedAt: Date;
-  dayKeyLocal: string; // YYYY-MM-DD (local)
-  modelsUsed: Set<ModelKey>;
+interface Activity {
   messages: number;
   tokens: number;
   totalCost: number;
   costByModel: Map<ModelKey, number>;
   messagesByModel: Map<ModelKey, number>;
   tokensByModel: Map<ModelKey, number>;
+}
+
+interface ParsedSession extends Activity {
+  modelsUsed: Set<ModelKey>;
+  startedAt: Date;
+  dayKeyLocal: string; // YYYY-MM-DD (local)
+  activityByDay: Map<string, Activity>;
 }
 
 interface DayAgg {
@@ -110,6 +114,7 @@ interface BreakdownProgressState {
 // individual fields where they are consumed so malformed optional data is ignored.
 const fieldsSchema = Type.Object({
   type: Type.Optional(Type.Unknown()),
+  id: Type.Optional(Type.Unknown()),
   timestamp: Type.Optional(Type.Unknown()),
   provider: Type.Optional(Type.Unknown()),
   model: Type.Optional(Type.Unknown()),
@@ -118,6 +123,7 @@ const fieldsSchema = Type.Object({
   toolName: Type.Optional(Type.Unknown()),
   message: Type.Optional(Type.Unknown()),
   messages: Type.Optional(Type.Unknown()),
+  usageEntries: Type.Optional(Type.Unknown()),
   details: Type.Optional(Type.Unknown()),
   results: Type.Optional(Type.Unknown()),
   usage: Type.Optional(Type.Unknown()),
@@ -130,6 +136,10 @@ const fieldsSchema = Type.Object({
   token_count: Type.Optional(Type.Unknown()),
   promptTokens: Type.Optional(Type.Unknown()),
   prompt_tokens: Type.Optional(Type.Unknown()),
+  input: Type.Optional(Type.Unknown()),
+  output: Type.Optional(Type.Unknown()),
+  cacheRead: Type.Optional(Type.Unknown()),
+  cacheWrite: Type.Optional(Type.Unknown()),
   inputTokens: Type.Optional(Type.Unknown()),
   input_tokens: Type.Optional(Type.Unknown()),
   completionTokens: Type.Optional(Type.Unknown()),
@@ -314,6 +324,19 @@ function extractProviderModelAndUsage(obj: Static<typeof fieldsSchema>) {
   };
 }
 
+function entryDate(obj: Static<typeof fieldsSchema>, fallback: Date | null): Date | null {
+  const message = Value.Check(fieldsSchema, obj.message) ? obj.message : null;
+
+  for (const value of [message?.timestamp, obj.timestamp]) {
+    if (!Value.Check(numericSchema, value)) continue;
+    const date = new Date(value);
+
+    if (Number.isFinite(date.getTime())) return date;
+  }
+
+  return fallback;
+}
+
 function firstNumber(...values: unknown[]): number {
   for (const value of values) {
     if (!Value.Check(numericSchema, value)) continue;
@@ -350,50 +373,55 @@ function extractTokensTotal(usage: Static<typeof fieldsSchema> | null): number {
   if (total) return total;
 
   return (
-    firstNumber(usage.promptTokens, usage.prompt_tokens, usage.inputTokens, usage.input_tokens) +
     firstNumber(
+      usage.input,
+      usage.promptTokens,
+      usage.prompt_tokens,
+      usage.inputTokens,
+      usage.input_tokens,
+    ) +
+    firstNumber(
+      usage.output,
       usage.completionTokens,
       usage.completion_tokens,
       usage.outputTokens,
       usage.output_tokens,
-    )
+    ) +
+    firstNumber(usage.cacheRead) +
+    firstNumber(usage.cacheWrite)
   );
 }
 
-interface NestedSubagentMessage {
-  message: Static<typeof fieldsSchema>;
-  model: ModelKey | null;
+function objects(
+  obj: Static<typeof fieldsSchema>,
+  key: "messages" | "usageEntries" | "results",
+): Static<typeof fieldsSchema>[] {
+  const value = obj[key];
+
+  if (!Value.Check(arraySchema, value)) return [];
+
+  return value.filter((entry): entry is Static<typeof fieldsSchema> =>
+    Value.Check(fieldsSchema, entry),
+  );
 }
 
-function nestedSubagentMessages(obj: Static<typeof fieldsSchema>): NestedSubagentMessage[] {
+function subagentResults(obj: Static<typeof fieldsSchema>): Static<typeof fieldsSchema>[] | null {
   const message = Value.Check(fieldsSchema, obj.message) ? obj.message : null;
 
-  if (message?.role !== "toolResult" || message.toolName !== "subagent") return [];
+  if (message?.role !== "toolResult" || message.toolName !== "subagent") return null;
   const details = Value.Check(fieldsSchema, message.details) ? message.details : null;
-  const results = Value.Check(arraySchema, details?.results) ? details.results : [];
-  const nested: NestedSubagentMessage[] = [];
 
-  for (const value of results) {
-    if (!Value.Check(fieldsSchema, value)) continue;
-    const model = Value.Check(stringSchema, value.model) ? value.model : null;
-    const messages = Value.Check(arraySchema, value.messages) ? value.messages : [];
+  if (!details) return [];
 
-    for (const childMessage of messages) {
-      if (Value.Check(fieldsSchema, childMessage)) {
-        nested.push({ message: childMessage, model });
-      }
-    }
-  }
-
-  return nested;
+  return objects(details, "results");
 }
 
-function usageTotals(messages: NestedSubagentMessage[]) {
+function usageTotals(entries: Static<typeof fieldsSchema>[]) {
   let tokens = 0;
   let cost = 0;
 
-  for (const { message } of messages) {
-    const { usage } = extractProviderModelAndUsage(message);
+  for (const entry of entries) {
+    const { usage } = extractProviderModelAndUsage(entry);
     tokens += extractTokensTotal(usage);
     cost += extractCostTotal(usage);
   }
@@ -401,7 +429,7 @@ function usageTotals(messages: NestedSubagentMessage[]) {
   return { tokens, cost };
 }
 
-async function walkSessionFiles(
+export async function walkSessionFiles(
   root: string,
   startCutoffLocal: Date,
   signal?: AbortSignal,
@@ -432,19 +460,7 @@ async function walkSessionFiles(
 
       if (!ent.isFile() || !ent.name.endsWith(".jsonl")) continue;
 
-      // Prefer filename timestamp, else fall back to mtime.
-      const startedAt = parseSessionStartFromFilename(ent.name);
-
-      if (startedAt) {
-        if (localMidnight(startedAt) >= startCutoffLocal) {
-          out.push(p);
-
-          if (onFound && out.length % 10 === 0) onFound(out.length);
-        }
-
-        continue;
-      }
-
+      // Old sessions can contain recent requests. Only mtime can rule them out.
       try {
         const st = await fs.stat(p);
         const approx = new Date(st.mtimeMs);
@@ -468,6 +484,7 @@ async function walkSessionFiles(
 export async function parseSessionFile(
   filePath: string,
   signal?: AbortSignal,
+  seenEntries = new Set<string>(),
 ): Promise<ParsedSession | null> {
   const fileName = path.basename(filePath);
   let startedAt = parseSessionStartFromFilename(fileName);
@@ -481,7 +498,38 @@ export async function parseSessionFile(
   const messagesByModel = new Map<ModelKey, number>();
   const tokensByModel = new Map<ModelKey, number>();
 
-  const addUsage = (mk: ModelKey, tokenCount: number, cost: number) => {
+  const activityByDay = new Map<string, Activity>();
+
+  const activity = (obj: Static<typeof fieldsSchema>, fallback?: Date): Activity | null => {
+    const date = entryDate(obj, fallback ?? startedAt);
+
+    if (!date) return null;
+    const key = toLocalDayKey(date);
+    let day = activityByDay.get(key);
+
+    if (!day) {
+      day = {
+        messages: 0,
+        tokens: 0,
+        totalCost: 0,
+        costByModel: new Map(),
+        messagesByModel: new Map(),
+        tokensByModel: new Map(),
+      };
+      activityByDay.set(key, day);
+    }
+
+    return day;
+  };
+
+  const addUsage = (mk: ModelKey, tokenCount: number, cost: number, day: Activity | null) => {
+    if (day) {
+      day.tokens += tokenCount;
+      day.totalCost += cost;
+      day.tokensByModel.set(mk, (day.tokensByModel.get(mk) ?? 0) + tokenCount);
+      day.costByModel.set(mk, (day.costByModel.get(mk) ?? 0) + cost);
+    }
+
     if (tokenCount > 0) {
       tokens += tokenCount;
       tokensByModel.set(mk, (tokensByModel.get(mk) ?? 0) + tokenCount);
@@ -493,10 +541,27 @@ export async function parseSessionFile(
     }
   };
 
+  const recordUsage = (
+    obj: Static<typeof fieldsSchema>,
+    fallbackModel?: ModelKey,
+    fallbackDate?: Date,
+  ) => {
+    const { provider, model, modelId, usage } = extractProviderModelAndUsage(obj);
+
+    if (!usage) return;
+
+    const mk =
+      modelKeyFromParts(provider, model ?? modelId) ?? fallbackModel ?? currentModel ?? "unknown";
+
+    modelsUsed.add(mk);
+    addUsage(mk, extractTokensTotal(usage), extractCostTotal(usage), activity(obj, fallbackDate));
+  };
+
   const recordMessage = (
     obj: Static<typeof fieldsSchema>,
     fallbackModel?: ModelKey | null,
     includeUsage = true,
+    fallbackDate?: Date,
   ) => {
     const { provider, model, modelId, usage } = extractProviderModelAndUsage(obj);
 
@@ -511,7 +576,14 @@ export async function parseSessionFile(
     messages += 1;
     messagesByModel.set(mk, (messagesByModel.get(mk) ?? 0) + 1);
 
-    if (includeUsage) addUsage(mk, extractTokensTotal(usage), extractCostTotal(usage));
+    const day = activity(obj, fallbackDate);
+
+    if (day) {
+      day.messages += 1;
+      day.messagesByModel.set(mk, (day.messagesByModel.get(mk) ?? 0) + 1);
+    }
+
+    if (includeUsage) addUsage(mk, extractTokensTotal(usage), extractCostTotal(usage), day);
   };
 
   const stream = createReadStream(filePath, { encoding: "utf8" });
@@ -560,30 +632,67 @@ export async function parseSessionFile(
         continue;
       }
 
-      if (obj?.type !== "message") continue;
-      const childMessages = nestedSubagentMessages(obj);
+      // Forked session files can copy the same billed entries. Do not dedupe
+      // by usage values: two real requests can have identical token counts.
+      if (Value.Check(stringSchema, obj.id) && Value.Check(stringSchema, obj.timestamp)) {
+        const identity = `${obj.id}/${obj.timestamp}`;
 
-      if (childMessages.length === 0) {
+        if (seenEntries.has(identity)) continue;
+        seenEntries.add(identity);
+      }
+
+      if (obj.type !== "message") {
+        // Compactions, branch summaries, and standalone usage are not messages.
+        recordUsage(obj);
+
+        continue;
+      }
+
+      const children = subagentResults(obj);
+
+      if (children === null) {
         recordMessage(obj);
         continue;
       }
 
-      // The aggregate usage is the same spend as the detailed child messages.
-      // Use details for model attribution, then retain any missing aggregate remainder.
+      // Detailed requests and usage entries are the same spend as their aggregates.
+      // Reconcile each child first so known models survive incomplete details.
       recordMessage(obj, null, false);
+      const fallbackDate = entryDate(obj, startedAt) ?? undefined;
+      let childTokens = 0;
+      let childCost = 0;
 
-      for (const child of childMessages) recordMessage(child.message, child.model);
+      for (const child of children) {
+        const { provider, model, modelId, usage } = extractProviderModelAndUsage(child);
+        const mk = modelKeyFromParts(provider, model ?? modelId) ?? "subagent/unknown";
+        const messages = objects(child, "messages");
+        const entries = objects(child, "usageEntries");
 
-      const message = Value.Check(fieldsSchema, obj.message) ? obj.message : null;
-      const aggregate = Value.Check(fieldsSchema, message?.usage) ? message.usage : null;
-      const detailed = usageTotals(childMessages);
-      const missingTokens = Math.max(0, extractTokensTotal(aggregate) - detailed.tokens);
-      const missingCost = Math.max(0, extractCostTotal(aggregate) - detailed.cost);
+        for (const message of messages) recordMessage(message, mk, true, fallbackDate);
+
+        for (const entry of entries) recordUsage(entry, mk, fallbackDate);
+
+        const detailed = usageTotals([...messages, ...entries]);
+        const missingTokens = Math.max(0, extractTokensTotal(usage) - detailed.tokens);
+        const missingCost = Math.max(0, extractCostTotal(usage) - detailed.cost);
+
+        if (missingTokens > 0 || missingCost > 1e-12) {
+          modelsUsed.add(mk);
+          addUsage(mk, missingTokens, missingCost, activity(child, fallbackDate));
+        }
+
+        childTokens += detailed.tokens + missingTokens;
+        childCost += detailed.cost + missingCost;
+      }
+
+      const { usage: aggregate } = extractProviderModelAndUsage(obj);
+      const missingTokens = Math.max(0, extractTokensTotal(aggregate) - childTokens);
+      const missingCost = Math.max(0, extractCostTotal(aggregate) - childCost);
 
       if (missingTokens > 0 || missingCost > 1e-12) {
         const mk = "subagent/unknown";
         modelsUsed.add(mk);
-        addUsage(mk, missingTokens, missingCost);
+        addUsage(mk, missingTokens, missingCost, activity(obj));
       }
     }
   } finally {
@@ -597,6 +706,7 @@ export async function parseSessionFile(
   return {
     startedAt,
     dayKeyLocal,
+    activityByDay,
     modelsUsed,
     messages,
     tokens,
@@ -648,42 +758,45 @@ export function buildRangeAgg(days: number, now: Date): RangeAgg {
   };
 }
 
-function addSessionToRange(range: RangeAgg, session: ParsedSession): void {
-  const day = range.dayByKey.get(session.dayKeyLocal);
+export function addSessionToRange(range: RangeAgg, session: ParsedSession): void {
+  // Session counts remain starts/day; activity is independently dated.
+  const startDay = range.dayByKey.get(session.dayKeyLocal);
 
-  if (!day) return;
+  if (startDay) {
+    range.sessions += 1;
+    startDay.sessions += 1;
 
-  range.sessions += 1;
-  range.totalMessages += session.messages;
-  range.totalTokens += session.tokens;
-  range.totalCost += session.totalCost;
-  day.sessions += 1;
-  day.messages += session.messages;
-  day.tokens += session.tokens;
-  day.totalCost += session.totalCost;
-
-  // Sessions-per-model (presence)
-  for (const mk of session.modelsUsed) {
-    day.sessionsByModel.set(mk, (day.sessionsByModel.get(mk) ?? 0) + 1);
-    range.modelSessions.set(mk, (range.modelSessions.get(mk) ?? 0) + 1);
+    for (const mk of session.modelsUsed) {
+      startDay.sessionsByModel.set(mk, (startDay.sessionsByModel.get(mk) ?? 0) + 1);
+      range.modelSessions.set(mk, (range.modelSessions.get(mk) ?? 0) + 1);
+    }
   }
 
-  // Messages-per-model
-  for (const [mk, n] of session.messagesByModel.entries()) {
-    day.messagesByModel.set(mk, (day.messagesByModel.get(mk) ?? 0) + n);
-    range.modelMessages.set(mk, (range.modelMessages.get(mk) ?? 0) + n);
-  }
+  for (const [key, activity] of session.activityByDay) {
+    const day = range.dayByKey.get(key);
 
-  // Tokens-per-model
-  for (const [mk, n] of session.tokensByModel.entries()) {
-    day.tokensByModel.set(mk, (day.tokensByModel.get(mk) ?? 0) + n);
-    range.modelTokens.set(mk, (range.modelTokens.get(mk) ?? 0) + n);
-  }
+    if (!day) continue;
+    range.totalMessages += activity.messages;
+    range.totalTokens += activity.tokens;
+    range.totalCost += activity.totalCost;
+    day.messages += activity.messages;
+    day.tokens += activity.tokens;
+    day.totalCost += activity.totalCost;
 
-  // Cost-per-model
-  for (const [mk, cost] of session.costByModel.entries()) {
-    day.costByModel.set(mk, (day.costByModel.get(mk) ?? 0) + cost);
-    range.modelCost.set(mk, (range.modelCost.get(mk) ?? 0) + cost);
+    for (const [mk, n] of activity.messagesByModel) {
+      day.messagesByModel.set(mk, (day.messagesByModel.get(mk) ?? 0) + n);
+      range.modelMessages.set(mk, (range.modelMessages.get(mk) ?? 0) + n);
+    }
+
+    for (const [mk, n] of activity.tokensByModel) {
+      day.tokensByModel.set(mk, (day.tokensByModel.get(mk) ?? 0) + n);
+      range.modelTokens.set(mk, (range.modelTokens.get(mk) ?? 0) + n);
+    }
+
+    for (const [mk, cost] of activity.costByModel) {
+      day.costByModel.set(mk, (day.costByModel.get(mk) ?? 0) + cost);
+      range.modelCost.set(mk, (range.modelCost.get(mk) ?? 0) + cost);
+    }
   }
 }
 
@@ -960,12 +1073,8 @@ function renderModelTable(range: RangeAgg, mode: MeasurementMode, maxRows = 8): 
 }
 
 function rangeSummary(range: RangeAgg, days: number, mode: MeasurementMode): string {
-  const avg = range.sessions > 0 ? range.totalCost / range.sessions : 0;
-
-  const costPart =
-    range.totalCost > 0
-      ? `${formatUsd(range.totalCost)} · avg ${formatUsd(avg)}/session`
-      : `$0.0000`;
+  // Spend in this window can belong to sessions started before it.
+  const costPart = `${formatUsd(range.totalCost)} recorded-equivalent`;
 
   if (mode === "tokens") {
     return `Last ${days} days: ${formatCount(range.sessions)} sessions · ${formatCount(range.totalTokens)} tokens · ${costPart}`;
@@ -1008,26 +1117,18 @@ async function computeBreakdown(
   });
 
   let parsedFiles = 0;
+  const seenEntries = new Set<string>();
 
   for (const filePath of candidates) {
     if (signal?.aborted) break;
     parsedFiles += 1;
     onProgress?.({ phase: "parse", parsedFiles, totalFiles });
 
-    const session = await parseSessionFile(filePath, signal);
+    const session = await parseSessionFile(filePath, signal, seenEntries);
 
     if (!session) continue;
 
-    const sessionDay = localMidnight(session.startedAt);
-
-    for (const d of RANGE_DAYS) {
-      const range = ranges.get(d)!;
-      const start = range.days[0].date;
-      const end = range.days[range.days.length - 1].date;
-
-      if (sessionDay < start || sessionDay > end) continue;
-      addSessionToRange(range, session);
-    }
+    for (const range of ranges.values()) addSessionToRange(range, session);
   }
 
   onProgress?.({ phase: "finalize" });
