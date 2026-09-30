@@ -13,7 +13,7 @@ This loads Pinnacle for this run. Your existing Pi configuration still applies.
 ## Extensions
 
 - [`cloak`](extensions/cloak/): Masks configured secrets in tool results before they enter the conversation.
-- [`codex-fast`](extensions/codex-fast/): Adds `/fast` to persistently request OpenAI Codex priority service and show its status.
+- [`codex-fast`](extensions/codex-fast/): Adds `/fast` to persistently request priority service for OpenAI ChatGPT OAuth models and show its status.
 - [`git-interceptor`](extensions/git-interceptor.ts): Prevents Git editor hangs and blocks agents from bypassing hooks with `--no-verify`.
 - [`notify`](extensions/notify.ts): Sends an OSC 777 desktop notification when an agent finishes and waits for input.
 - [`session-breakdown`](extensions/session-breakdown.ts): Adds `/session-breakdown` for interactive 7/30/90-day and 1-year (365-day) session, token, model, and cost summaries.

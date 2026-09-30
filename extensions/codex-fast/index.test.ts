@@ -11,14 +11,14 @@ import {
   ModelRegistry,
   ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
-import extension, { isCodex, loadFastMode } from "./index";
+import extension, { supportsFast, loadFastMode } from "./index";
 
-const model = (id = "gpt-6-astra"): Model<"openai-codex-responses"> => ({
+const model = (id = "gpt-6-astra"): Model<"openai-responses"> => ({
   id,
   name: id,
-  provider: "openai-codex",
-  api: "openai-codex-responses",
-  baseUrl: "https://example.invalid",
+  provider: "openai",
+  api: "openai-responses",
+  baseUrl: "https://api.openai.com/v1",
   reasoning: true,
   input: ["text"],
   cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 },
@@ -27,10 +27,6 @@ const model = (id = "gpt-6-astra"): Model<"openai-codex-responses"> => ({
 });
 
 const context = { messages: [] };
-
-const token = Buffer.from(
-  JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "test" } }),
-).toString("base64url");
 
 let root: string;
 
@@ -69,9 +65,9 @@ beforeEach(async () => {
   writeFileSync(
     join(root, "auth.json"),
     JSON.stringify({
-      "openai-codex": {
+      openai: {
         type: "oauth",
-        access: `test.${token}.test`,
+        access: "chatgpt-access-token",
         refresh: "unused",
         expires: Date.now() + 3_600_000,
       },
@@ -143,28 +139,130 @@ beforeEach(async () => {
   };
   // SAFETY: the fixture implements every registration method used by the extension.
   await extension(api as ExtensionAPI, root);
+  await registry.refresh({ allowNetwork: false });
   emit("session_start");
 });
 
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-test("Codex detection is provider-scoped, not model-name-scoped", () => {
+test("Fast targets are provider/API-scoped, not model-name-scoped", () => {
   for (const id of ["gpt-6-astra", "gpt-5.6-sol", "future-model"]) {
-    assert.ok(isCodex(model(id)));
-    assert.equal(isCodex({ ...model(id), provider: "openai" }), false);
+    assert.ok(supportsFast(model(id)));
+    assert.equal(supportsFast({ ...model(id), provider: "openrouter" }), false);
   }
 
-  assert.equal(isCodex(undefined), false);
+  assert.equal(
+    supportsFast({ ...model(), provider: "openai-codex", api: "openai-codex-responses" }),
+    false,
+  );
+  assert.equal(supportsFast({ ...model(), api: "openai-completions" }), false);
+  assert.equal(supportsFast({ ...model(), baseUrl: "https://example.invalid" }), false);
+  assert.equal(supportsFast(undefined), false);
+});
+
+test("legacy Codex is not wrapped and never shows Fast status", async () => {
+  emit("session_shutdown");
+  const legacy = registry.getProvider("openai-codex");
+  // SAFETY: same registration fixture, simulating extension reload.
+  await extension(api as ExtensionAPI, root);
+  assert.equal(registry.getProvider("openai-codex"), legacy);
+  assert.deepEqual(registry.getRegisteredProviderIds(), ["openai"]);
+  ctx.model = { ...model(), provider: "openai-codex", api: "openai-codex-responses" };
+  await command.handler("on", ctx);
+  assert.equal(status, undefined);
+});
+
+test("OpenAI OAuth full and simple streams request priority with fallback pricing", async () => {
+  const target = model();
+  ctx.model = target;
+
+  for (const tier of ["default", "fast", "priority", undefined]) {
+    responseTier = tier;
+
+    for (const simple of [false, true]) {
+      await command.handler("off", ctx);
+      const options = { ...request, reasoning: "high" as const, reasoningEffort: "high" as const };
+
+      const stream = () => {
+        if (simple) return registry.streamSimple(target, context, options);
+
+        return registry.stream(target, context, options);
+      };
+
+      const normal = await stream().result();
+      assert.equal(normal.stopReason, "stop", normal.errorMessage);
+      const ordinary = JSON.parse(payloads.at(-1)!);
+      assert.equal(ordinary.service_tier, undefined);
+      assert.equal(ordinary.reasoning.effort, "high");
+
+      await command.handler("on", ctx);
+      assert.equal(status, "⚡ Fast");
+      const fast = await stream().result();
+      assert.equal(fast.stopReason, "stop", fast.errorMessage);
+      assert.deepEqual(JSON.parse(payloads.at(-1)!), { ...ordinary, service_tier: "priority" });
+      assert.equal(requestHeaders.get("authorization"), "Bearer chatgpt-access-token");
+      // OpenAI Responses trusts a reported tier and falls back to the request only when omitted.
+      let expectedCost = normal.usage.cost.total;
+
+      if (tier === undefined) expectedCost *= 2;
+
+      assert.equal(fast.usage.cost.total, expectedCost);
+    }
+  }
+
+  emit("session_shutdown");
+  assert.deepEqual(registry.getRegisteredProviderIds(), []);
+  await registry.stream(target, context, request).result();
+  assert.equal(JSON.parse(payloads.at(-1)!).service_tier, undefined);
+});
+
+test("OpenAI API-key and custom endpoint requests remain unchanged", async () => {
+  await command.handler("on", ctx);
+
+  for (const simple of [false, true]) {
+    for (const target of [model(), { ...model(), baseUrl: "https://example.invalid" }]) {
+      let apiKey = "proxy-key";
+
+      if (target.baseUrl === "https://api.openai.com/v1") apiKey = "sk-test";
+
+      const options = { ...request, apiKey, serviceTier: "flex" as const };
+
+      const stream = () => {
+        if (simple) return registry.streamSimple(target, context, options);
+
+        return registry.stream(target, context, options);
+      };
+
+      let expectedTier: string | undefined = "flex";
+
+      if (simple) expectedTier = undefined;
+
+      const result = await stream().result();
+      assert.equal(result.stopReason, "stop", result.errorMessage);
+      assert.equal(JSON.parse(payloads.at(-1)!).service_tier, expectedTier);
+    }
+  }
+
+  writeFileSync(
+    join(root, "auth.json"),
+    JSON.stringify({ openai: { type: "api_key", key: "sk-test" } }),
+  );
+  await registry.refresh({ allowNetwork: false });
+  ctx.model = model();
+  emit("model_select");
+  assert.equal(status, undefined);
 });
 
 test("registered full streams preserve options and priority fallback pricing", async () => {
+  responseTier = undefined;
+
   for (const id of ["gpt-6-astra", "gpt-6-sol", "gpt-5.5", "future-model"]) {
     await command.handler("off", ctx);
 
     const options = {
       ...request,
       reasoningEffort: "high" as const,
-      textVerbosity: "high" as const,
+      toolChoice: "none" as const,
     };
 
     const normal = await registry.stream(model(id), context, options).result();
@@ -172,7 +270,7 @@ test("registered full streams preserve options and priority fallback pricing", a
     const ordinary = JSON.parse(payloads.at(-1)!);
     assert.equal(ordinary.service_tier, undefined);
     assert.equal(ordinary.reasoning.effort, "high");
-    assert.equal(ordinary.text.verbosity, "high");
+    assert.equal(ordinary.tool_choice, "none");
 
     await command.handler("on", ctx);
     const fast = await registry.stream(model(id), context, options).result();
@@ -187,6 +285,8 @@ test("registered full streams preserve options and priority fallback pricing", a
 });
 
 test("simple streams preserve reasoning and tools while retaining priority pricing", async () => {
+  responseTier = undefined;
+
   for (const reasoning of [undefined, "high", "xhigh"] as const) {
     await command.handler("off", ctx);
     const options = { ...request, reasoning, toolChoice: "none" as const };
@@ -228,8 +328,10 @@ test("command toggles, validates input, updates status, and restores persisted m
   await extension(api as ExtensionAPI, root);
   emit("session_start");
   assert.equal(status, undefined);
+
   await registry.streamSimple(model(), context, request).result();
   assert.equal(JSON.parse(payloads.at(-1)!).service_tier, "priority");
+
   await command.handler("", ctx);
   assert.equal(loadFastMode(root), false);
 });
@@ -250,16 +352,18 @@ test("failed atomic replacement leaves live mode and status unchanged and cleans
 
 test("model overrides and headers can be removed after registration and reload", async () => {
   emit("session_shutdown");
-  const builtin = registry.getProvider("openai-codex")!.getModels()[0];
-  const other = registry.getProvider("openai");
+  const target = model();
+  const provider = target.provider;
+  const builtin = registry.getProvider(provider)!.getModels()[0];
+
   const modelsPath = join(root, "models.json");
   writeFileSync(
     modelsPath,
     JSON.stringify({
       providers: {
-        "openai-codex": {
+        [provider]: {
           headers: { "x-fast-test": "old" },
-          models: [{ id: "custom-codex", name: "Custom Codex" }],
+          models: [{ id: "custom-model", name: "Custom Model" }],
           modelOverrides: { [builtin.id]: { name: "Overridden name" } },
         },
       },
@@ -269,19 +373,22 @@ test("model overrides and headers can be removed after registration and reload",
   // SAFETY: same registration fixture, simulating extension reload with existing overrides.
   await extension(api as ExtensionAPI, root);
   emit("session_start");
-  assert.equal(registry.find("openai-codex", builtin.id)!.name, "Overridden name");
-  assert.ok(registry.find("openai-codex", "custom-codex"));
-  assert.equal(registry.getProvider("openai"), other);
+  assert.equal(registry.find(provider, builtin.id)!.name, "Overridden name");
+  assert.ok(registry.find(provider, "custom-model"));
+  assert.equal(registry.getProvider("openai")!.auth.oauth?.isSubscription, true);
   await command.handler("on", ctx);
-  await registry.streamSimple(model(), context, request).result();
+  await registry.streamSimple(target, context, request).result();
   assert.equal(requestHeaders.get("x-fast-test"), "old");
-  assert.equal(requestHeaders.get("authorization"), `Bearer test.${token}.test`);
+  assert.equal(
+    requestHeaders.get("authorization"),
+    `Bearer ${await registry.getApiKeyForProvider(provider)}`,
+  );
 
   writeFileSync(modelsPath, "{}");
   await registry.refresh({ allowNetwork: false });
-  assert.equal(registry.find("openai-codex", builtin.id)!.name, builtin.name);
-  assert.equal(registry.find("openai-codex", "custom-codex"), undefined);
-  await registry.streamSimple(model(), context, request).result();
+  assert.equal(registry.find(provider, builtin.id)!.name, builtin.name);
+  assert.equal(registry.find(provider, "custom-model"), undefined);
+  await registry.streamSimple(target, context, request).result();
   assert.equal(requestHeaders.get("x-fast-test"), null);
   assert.equal(JSON.parse(payloads.at(-1)!).service_tier, "priority");
 });

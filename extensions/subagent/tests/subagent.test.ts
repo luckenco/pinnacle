@@ -9,7 +9,7 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 import type {
   ExtensionAPI,
-  ExtensionContext,
+  ExtensionToolContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { type SubagentModels, saveConfig } from "../../subagent-models/config";
@@ -19,7 +19,7 @@ let root: string;
 
 let tool: Pick<ToolDefinition, "execute">;
 
-let ctx: ExtensionContext;
+let ctx: ExtensionToolContext;
 
 let configPath: string;
 
@@ -54,7 +54,7 @@ beforeEach(() => {
     model: { provider: "test", id: "parent" },
     modelRegistry: { getAvailable: () => models },
     thinkingLevel: "high",
-  } as ExtensionContext;
+  } as ExtensionToolContext;
   // SAFETY: registration only calls registerTool; no other ExtensionAPI method is used.
   subagent(
     {

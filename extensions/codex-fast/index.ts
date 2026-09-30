@@ -6,7 +6,7 @@ import {
   InMemoryCredentialStore,
   type Model,
   type Api,
-  type OpenAICodexResponsesOptions,
+  type ApiStreamOptions,
 } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
@@ -21,14 +21,20 @@ const STATUS_KEY = "codex-fast";
 
 const fastModeSchema = Type.Object({ enabled: Type.Boolean() });
 
-type CodexModel = Model<"openai-codex-responses">;
-
-export function isCodex(model: Pick<Model<string>, "provider"> | undefined): boolean {
-  return model?.provider === "openai-codex";
+export function supportsFast(model: Model<Api> | undefined): model is Model<"openai-responses"> {
+  return (
+    model?.provider === "openai" &&
+    model.api === "openai-responses" &&
+    model.baseUrl === "https://api.openai.com/v1"
+  );
 }
 
-function isCodexApi(model: Model<Api>): model is CodexModel {
-  return model.api === "openai-codex-responses";
+function wantsPriority(
+  model: Model<Api>,
+  apiKey: string | undefined,
+): model is Model<"openai-responses"> {
+  // Match Pi's OpenAI Responses detection of Sign in with ChatGPT tokens.
+  return supportsFast(model) && apiKey !== undefined && !apiKey.startsWith("sk-");
 }
 
 const configPath = (agentDir: string) => join(agentDir, "extensions", "codex-fast.json");
@@ -65,55 +71,59 @@ export default async function codexFast(pi: ExtensionAPI, agentDir = getAgentDir
     refreshOnCreate: false,
   });
 
-  const provider = runtime.getProvider("openai-codex");
+  const provider = runtime.getProvider("openai");
 
-  if (!provider) throw new Error("OpenAI Codex provider is unavailable");
+  if (!provider) throw new Error("OpenAI provider is unavailable");
   let enabled = loadFastMode(agentDir);
 
   const syncStatus = (ctx: ExtensionContext) => {
     if (!ctx.hasUI) return;
-    const status = enabled && isCodex(ctx.model) ? ctx.ui.theme.fg("accent", "⚡ Fast") : undefined;
+
+    const active = enabled && supportsFast(ctx.model) && ctx.modelRegistry.isUsingOAuth(ctx.model);
+
+    const status = active ? ctx.ui.theme.fg("accent", "⚡ Fast") : undefined;
     ctx.ui.setStatus(STATUS_KEY, status);
   };
 
   pi.registerProvider({
     ...provider,
     stream(model, context, options) {
-      if (!enabled || !isCodex(model) || !isCodexApi(model))
+      if (!enabled || !wantsPriority(model, options?.apiKey))
         return provider.stream(model, context, options);
 
       // SAFETY: the API guard narrows the model; TS cannot narrow its generic options with it.
-      const codexOptions = options as OpenAICodexResponsesOptions | undefined;
+      const fastOptions = options as ApiStreamOptions<"openai-responses"> | undefined;
 
-      return provider.stream<"openai-codex-responses">(model, context, {
-        ...codexOptions,
+      return provider.stream<"openai-responses">(model, context, {
+        ...fastOptions,
         serviceTier: "priority",
       });
     },
     streamSimple(model, context, options) {
-      if (!enabled || !isCodex(model) || !isCodexApi(model))
+      if (!enabled || !wantsPriority(model, options?.apiKey))
         return provider.streamSimple(model, context, options);
 
       if (!options?.apiKey) throw new Error(`No API key for provider: ${model.provider}`);
       const effort = options.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
 
       // Keep the tier in options: a payload-only hook loses Pi's fallback tier pricing.
-      return provider.stream(model, context, {
+      return provider.stream<"openai-responses">(model, context, {
         ...options,
         reasoningEffort: effort === "off" ? undefined : effort,
         serviceTier: "priority",
       });
     },
   });
+
   pi.on("session_start", (_event, ctx) => syncStatus(ctx));
   pi.on("model_select", (_event, ctx) => syncStatus(ctx));
   pi.on("session_shutdown", (_event, ctx) => {
-    pi.unregisterProvider("openai-codex");
+    pi.unregisterProvider("openai");
     ctx.ui.setStatus(STATUS_KEY, undefined);
   });
 
   pi.registerCommand("fast", {
-    description: "Request Codex priority service (increased usage); toggle or on/off",
+    description: "Request OpenAI subscription priority service (increased usage); toggle or on/off",
     handler: async (args, ctx) => {
       const action = args.trim().toLowerCase();
 
