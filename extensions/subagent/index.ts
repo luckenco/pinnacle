@@ -1,18 +1,24 @@
 // Adapted from Pi's subagent example (v0.87.1). See README.md for source and license.
-import { spawn } from "node:child_process";
+import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, join } from "node:path";
+import type { Readable } from "node:stream";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { getSupportedThinkingLevels, type Message, type Usage } from "@earendil-works/pi-ai";
 import {
+  type CompactionResult,
   type ExtensionAPI,
   type ExtensionContext,
   getAgentDir,
+  type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import { Value } from "typebox/value";
 import { loadConfig, missingAssignments } from "../subagent-models/config";
 
-const READ_TOOLS = ["read", "grep", "find", "ls"];
+const READ_TOOLS = ["read", "grep", "find", "ls", "codemode"];
+
+const HAND_TOOLS = [...READ_TOOLS, "bash", "edit", "write"];
 
 const MAX_TASKS = 8;
 
@@ -26,7 +32,10 @@ const Task = Type.Object({
   }),
   name: Type.Optional(Type.String({ description: "Label used to identify this result" })),
   cwd: Type.Optional(
-    Type.String({ description: "Working directory; use separate workspaces for parallel writers" }),
+    Type.String({
+      description:
+        "Working directory; defaults to parent cwd. Parallel writers need orthogonal tasks and disjoint file ownership.",
+    }),
   ),
   model: Type.Optional(
     Type.String({
@@ -48,7 +57,7 @@ const Task = Type.Object({
     Type.Array(Type.String(), {
       minItems: 1,
       description:
-        "Explicit child tool allowlist; default read, grep, find, ls. For deferred MCP, include tool_search and each exact mcp__<server>__<tool> name.",
+        "Replaces child defaults: read, grep, find, ls, codemode; hand also gets bash, edit, write. For deferred MCP, include tool_search and each exact mcp__<server>__<tool> name.",
     }),
   ),
 });
@@ -75,6 +84,32 @@ type Assignment = {
   source: "eye" | "hand" | "explicit" | "parent";
 };
 
+type UsageRecord = {
+  type: "usage" | "compaction" | "branch_summary";
+  id?: string;
+  timestamp: string;
+  provider?: string;
+  model?: string;
+  usage: Usage;
+};
+
+const UsageSchema = Type.Object({
+  input: Type.Number({ minimum: 0 }),
+  output: Type.Number({ minimum: 0 }),
+  cacheRead: Type.Number({ minimum: 0 }),
+  cacheWrite: Type.Number({ minimum: 0 }),
+  totalTokens: Type.Number({ minimum: 0 }),
+  cacheWrite1h: Type.Optional(Type.Number({ minimum: 0 })),
+  reasoning: Type.Optional(Type.Number({ minimum: 0 })),
+  cost: Type.Object({
+    input: Type.Number({ minimum: 0 }),
+    output: Type.Number({ minimum: 0 }),
+    cacheRead: Type.Number({ minimum: 0 }),
+    cacheWrite: Type.Number({ minimum: 0 }),
+    total: Type.Number({ minimum: 0 }),
+  }),
+});
+
 type Result = {
   name: string;
   task: string;
@@ -85,7 +120,8 @@ type Result = {
   stopReason?: string;
   error?: string;
   messages: Message[];
-  usage: { turns: number; input: number; output: number; cost: number };
+  usageEntries: UsageRecord[];
+  usage: Usage & { turns: number };
 };
 
 type Details = { mode: Mode; results: Result[] };
@@ -233,7 +269,11 @@ function run(
   signal: AbortSignal | undefined,
   update?: (result: Result) => void,
 ): Promise<Result> {
-  signal?.throwIfAborted();
+  let tools = READ_TOOLS;
+
+  if (brief.role === "hand") tools = HAND_TOOLS;
+
+  if (brief.tools) tools = brief.tools;
 
   const args = [
     "--mode",
@@ -243,7 +283,7 @@ function run(
     "--exclude-tools",
     "subagent",
     "--tools",
-    (brief.tools ?? READ_TOOLS).join(","),
+    tools.join(","),
   ];
 
   if (assignment.model) args.push("--model", assignment.model);
@@ -259,16 +299,33 @@ function run(
     role: brief.role,
     exitCode: 1,
     messages: [],
-    usage: { turns: 0, input: 0, output: 0, cost: 0 },
+    usageEntries: [],
+    usage: { turns: 0, ...emptyUsage() },
   };
 
-  return new Promise<Result>((resolve, reject) => {
+  if (signal?.aborted) {
+    result.stopReason = "aborted";
+    result.error = `Subagent ${result.name} was aborted`;
+
+    return Promise.resolve(result);
+  }
+
+  return new Promise<Result>((resolve) => {
     const { command, args: childArgs } = invocation(args);
 
-    const child = spawn(command, childArgs, {
-      cwd: brief.cwd ?? cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    let child: ChildProcessByStdio<null, Readable, Readable>;
+
+    try {
+      child = spawn(command, childArgs, {
+        cwd: brief.cwd ?? cwd,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      result.error = error instanceof Error ? error.message : String(error);
+      resolve(result);
+
+      return;
+    }
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -287,9 +344,18 @@ function run(
 
     if (signal?.aborted) abort();
 
+    let currentModel = assignment.model;
+    const seenUsageEntries = new Set<string>();
+
     const line = (value: string) => {
       if (!value.trim()) return;
-      let event: { type?: string; message?: Message };
+
+      let event: {
+        type?: string;
+        message?: Message;
+        entry?: SessionEntry;
+        result?: CompactionResult;
+      };
 
       try {
         event = JSON.parse(value);
@@ -297,16 +363,68 @@ function run(
         return;
       }
 
+      let record: UsageRecord | undefined;
+
+      if (event.type === "entry_appended" && event.entry) {
+        const entry = event.entry;
+
+        if (
+          entry.type === "usage" ||
+          entry.type === "compaction" ||
+          entry.type === "branch_summary"
+        ) {
+          if (!Value.Check(UsageSchema, entry.usage)) return;
+          const identity = `${entry.id}/${entry.timestamp}`;
+
+          if (seenUsageEntries.has(identity)) return;
+          seenUsageEntries.add(identity);
+          record = {
+            type: entry.type,
+            id: entry.id,
+            timestamp: entry.timestamp,
+            usage: entry.usage,
+          };
+
+          if (entry.type === "usage") {
+            record.provider = entry.provider;
+            record.model = entry.model;
+          } else {
+            // Summary events lack actual-model metadata; preserve the current-model inference.
+            record.model = currentModel;
+          }
+        }
+      } else if (event.type === "compaction_end" && Value.Check(UsageSchema, event.result?.usage)) {
+        record = {
+          type: "compaction",
+          timestamp: new Date().toISOString(),
+          model: currentModel,
+          usage: event.result.usage,
+        };
+      }
+
+      if (record) {
+        result.usageEntries.push(record);
+        addUsage(result.usage, record.usage);
+        update?.(result);
+
+        return;
+      }
+
       if (event.type !== "message_end" || !event.message) return;
       result.messages.push(event.message);
+
+      if (
+        (event.message.role === "assistant" || event.message.role === "toolResult") &&
+        event.message.usage
+      ) {
+        addUsage(result.usage, event.message.usage);
+      }
 
       if (event.message.role === "assistant") {
         const message = event.message;
         result.usage.turns++;
-        result.usage.input += message.usage.input;
-        result.usage.output += message.usage.output;
-        result.usage.cost += message.usage.cost.total;
-        result.model ??= `${message.provider}/${message.model}`;
+        currentModel = `${message.provider}/${message.model}`;
+        result.model ??= currentModel;
         result.stopReason = message.stopReason;
         result.error = message.errorMessage;
       }
@@ -333,13 +451,12 @@ function run(
 
       if (buffer.trim()) line(buffer);
 
-      if (aborted) {
-        reject(new Error(`Subagent ${result.name} was aborted`));
-
-        return;
-      }
-
       result.exitCode = code ?? 1;
+
+      if (aborted) {
+        result.stopReason = "aborted";
+        result.error = `Subagent ${result.name} was aborted`;
+      }
 
       if (result.exitCode !== 0)
         result.error ??= stderr || `Subagent exited with code ${result.exitCode}`;
@@ -351,8 +468,8 @@ function run(
   });
 }
 
-function totalUsage(results: Result[]): Usage {
-  const total: Usage = {
+function emptyUsage(): Usage {
+  return {
     input: 0,
     output: 0,
     cacheRead: 0,
@@ -360,33 +477,33 @@ function totalUsage(results: Result[]): Usage {
     totalTokens: 0,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
+}
 
-  for (const result of results) {
-    for (const message of result.messages) {
-      if (message.role !== "assistant" && message.role !== "toolResult") continue;
-      const usage = message.usage;
+function addUsage(total: Usage, usage: Usage): void {
+  total.input += usage.input;
+  total.output += usage.output;
+  total.cacheRead += usage.cacheRead;
+  total.cacheWrite += usage.cacheWrite;
+  total.totalTokens += usage.totalTokens;
+  total.cost.input += usage.cost.input;
+  total.cost.output += usage.cost.output;
+  total.cost.cacheRead += usage.cost.cacheRead;
+  total.cost.cacheWrite += usage.cost.cacheWrite;
+  total.cost.total += usage.cost.total;
 
-      if (!usage) continue;
-      total.input += usage.input;
-      total.output += usage.output;
-      total.cacheRead += usage.cacheRead;
-      total.cacheWrite += usage.cacheWrite;
-      total.totalTokens += usage.totalTokens;
-      total.cost.input += usage.cost.input;
-      total.cost.output += usage.cost.output;
-      total.cost.cacheRead += usage.cost.cacheRead;
-      total.cost.cacheWrite += usage.cost.cacheWrite;
-      total.cost.total += usage.cost.total;
-
-      if (usage.cacheWrite1h !== undefined) {
-        total.cacheWrite1h = (total.cacheWrite1h ?? 0) + usage.cacheWrite1h;
-      }
-
-      if (usage.reasoning !== undefined) {
-        total.reasoning = (total.reasoning ?? 0) + usage.reasoning;
-      }
-    }
+  if (usage.cacheWrite1h !== undefined) {
+    total.cacheWrite1h = (total.cacheWrite1h ?? 0) + usage.cacheWrite1h;
   }
+
+  if (usage.reasoning !== undefined) {
+    total.reasoning = (total.reasoning ?? 0) + usage.reasoning;
+  }
+}
+
+function totalUsage(results: Result[]): Usage {
+  const total = emptyUsage();
+
+  for (const result of results) addUsage(total, result.usage);
 
   return total;
 }
@@ -406,7 +523,7 @@ export default function subagent(
     name: "subagent",
     label: "Subagent",
     description:
-      "Run one self-contained task, independent parallel tasks, or a sequential chain in separate Pi processes. The child has a fresh conversation, not a separate filesystem. Default tools are read-only (read, grep, find, ls); set tools explicitly to allow writing, Bash, or MCP. Use role eye/hand for configured models and reasoning, or model for an exact override. Implicit eye tasks consume the ordered pool; overflow seats need an explicit model. A chain substitutes {previous} with the previous answer. Give parallel writers separate working directories.",
+      "Run one self-contained task, independent parallel tasks, or a sequential chain in separate Pi processes. The child has a fresh conversation, not a separate filesystem. Default tools are read, grep, find, ls, codemode; role hand also gets bash, edit, write. Explicit tools replace those defaults; name MCP tools explicitly. Use role eye/hand for configured models and reasoning, or model for an exact override. Implicit eye tasks consume the ordered pool; overflow seats need an explicit model. A chain substitutes {previous} with the previous answer. Parallel writers may share a working tree for orthogonal tasks with disjoint file ownership; serialize shared file or contract changes.",
     parameters: Params,
     async execute(_id, params, signal, onUpdate, ctx) {
       const modes = [params.task, params.tasks, params.chain].filter(
@@ -470,19 +587,16 @@ export default function subagent(
             task: brief.task.replaceAll("{previous}", previous),
           });
 
-          if (failed(result))
-            throw new Error(`Chain stopped at step ${index + 1}: ${output(result)}`);
+          if (failed(result)) break;
           previous = finalText(result.messages);
         }
       } else if (mode === "single") {
-        const result = await runAt(0, briefs[0]);
-
-        if (failed(result)) throw new Error(`Subagent failed: ${output(result)}`);
+        await runAt(0, briefs[0]);
       } else {
         let next = 0;
         await Promise.all(
           Array.from({ length: Math.min(MAX_CONCURRENT, briefs.length) }, async () => {
-            while (next < briefs.length) {
+            while (next < briefs.length && !signal?.aborted) {
               const index = next++;
               await runAt(index, briefs[index]);
             }
@@ -490,19 +604,36 @@ export default function subagent(
         );
       }
 
-      const details: Details = { mode, results };
+      // Cancellation may leave unstarted parallel slots. Keep every completed
+      // or interrupted child's accounting, and wait for all running children.
+      const completed = results.filter(Boolean);
+      const details: Details = { mode, results: completed };
 
-      const usage = totalUsage(results);
+      const usage = totalUsage(completed);
 
-      if (mode !== "parallel")
+      if (mode !== "parallel") {
+        const last = completed[completed.length - 1];
+        let text = output(last);
+
+        if (failed(last)) {
+          let prefix = "Subagent failed";
+
+          if (mode === "chain") prefix = `Chain stopped at step ${completed.length}`;
+
+          text = `${prefix}: ${text}`;
+        }
+
         return {
-          content: [{ type: "text", text: output(results[results.length - 1]) }],
+          content: [{ type: "text", text }],
+          isError: failed(last),
           details,
           usage,
         };
-      const success = results.filter((result) => !failed(result)).length;
+      }
 
-      const summary = results.map(
+      const success = completed.filter((result) => !failed(result)).length;
+
+      const summary = completed.map(
         (result, index) =>
           `### ${index + 1}. ${result.name} (${failed(result) ? "failed" : "completed"}; ${result.model ?? "unknown model"})\n${capped(output(result))}`,
       );
@@ -511,9 +642,10 @@ export default function subagent(
         content: [
           {
             type: "text",
-            text: `${success}/${results.length} succeeded\n\n${summary.join("\n\n")}`,
+            text: `${success}/${briefs.length} succeeded${signal?.aborted ? " (cancelled)" : ""}\n\n${summary.join("\n\n")}`,
           },
         ],
+        isError: success === 0 || signal?.aborted === true,
         details,
         usage,
       };

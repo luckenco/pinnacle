@@ -47,7 +47,13 @@ Run `/subagent-models` to configure the models used by Pinnacle workflows:
 - **Eyes** are an ordered pool of models for exploration, design, review, judgment, and synthesis. Each eye has its own reasoning level. Skills use the pool in order before choosing more models if needed.
 - **Hand** is the required model for bounded implementation tasks. It has its own reasoning level, even if you use the same model as an eye.
 
-Subagent tasks request `role: "eye"` or `role: "hand"`. Use `eyeIndex` to select an eye by its 1-based position. The dispatcher checks the model and reasoning level before launch and reports an error if either is unavailable. Direct calls can still specify a `model` or inherit the parent's model. Pi warns at session start until you configure at least one eye and a hand. See the [model-role guide](extensions/subagent-models/README.md) and [subagent tool guide](extensions/subagent/README.md) for details.
+Subagent tasks request `role: "eye"` or `role: "hand"`. Use `eyeIndex` to select an eye by its 1-based position. The dispatcher checks the model and reasoning level before launch and reports an error if either is unavailable. Direct calls can still specify a `model` or inherit the parent's model. Child defaults include codemode and read-only file tools; hands also get Bash, edit, and write. An explicit `tools` list replaces those defaults. Pi warns at session start until you configure at least one eye and a hand. See the [model-role guide](extensions/subagent-models/README.md) and [subagent tool guide](extensions/subagent/README.md) for details.
+
+### Parallel implementation
+
+Parallel hands can share one working tree when their features are orthogonal and their file ownership is disjoint. Establish shared contracts first; keep shared files, history operations, and final integration under one writer. Separate workspaces are for competing implementations or experiments needing independent baselines, not a default requirement for parallel feature work.
+
+StackScout can optionally provide caller/dependency evidence before dispatch and scoped impact reviews afterward in Rust/TypeScript repositories. It does not enforce ownership or prove independence. See [parallel hands and StackScout guidance](extensions/subagent/README.md#parallel-hands).
 
 ## Scripts and supporting assets
 
