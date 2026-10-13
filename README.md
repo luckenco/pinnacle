@@ -40,6 +40,10 @@ This loads Pinnacle for this run. Your existing Pi configuration still applies.
 - [`uv`](skills/uv/SKILL.md): Standardizes Python dependency management and execution on `uv` instead of pip, Python, or virtualenv commands.
 - [`why`](skills/why/SKILL.md): Investigates code rationale across source history and available organizational evidence, then returns a cited confidence-ranked explanation.
 
+## Prompts
+
+- [`/implement <task>`](prompts/implement.md): Implements a bounded task with behavior verification, focused review, and an evidence-based handoff.
+
 ## Eye and hand model routing
 
 Run `/subagent-models` to configure the models used by Pinnacle workflows:
@@ -61,7 +65,6 @@ StackScout can optionally provide caller/dependency evidence before dispatch and
 - [`skills/principles/`](skills/principles/): Holds shared workflow principles referenced by skills rather than exposed as separate skills.
 - [`skills/show-me-your-work/scripts/log.sh`](skills/show-me-your-work/scripts/log.sh): Appends sanitized rows to a decision log with timestamps and spreadsheet-formula protection.
 - [`doom-peacock`](themes/doom-peacock.json), [`gruvbox-dark-hard`](themes/gruvbox-dark-hard.json), and [`gruvbox-dark`](themes/gruvbox-dark.json): Bundled Pi themes.
-- [`prompts/`](prompts/): Reserved for package prompt templates and currently empty.
 
 ## Session breakdown accounting
 
