@@ -1,24 +1,20 @@
 // Adapted from Pi's subagent example (v0.87.1). See README.md for source and license.
 import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename } from "node:path";
 import type { Readable } from "node:stream";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { getSupportedThinkingLevels, type Message, type Usage } from "@earendil-works/pi-ai";
-import {
-  type CompactionResult,
-  type ExtensionAPI,
-  type ExtensionContext,
-  getAgentDir,
-  type SessionEntry,
+import type { Message, Usage } from "@earendil-works/pi-ai";
+import type {
+  CompactionResult,
+  ExtensionAPI,
+  ExtensionContext,
+  SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
-import { loadConfig, missingAssignments } from "../subagent-models/config";
 
-const READ_TOOLS = ["read", "grep", "find", "ls", "codemode"];
-
-const HAND_TOOLS = [...READ_TOOLS, "bash", "edit", "write"];
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 const MAX_TASKS = 8;
 
@@ -39,25 +35,21 @@ const Task = Type.Object({
   ),
   model: Type.Optional(
     Type.String({
-      description: "Exact Pi provider/model override; omit when using a configured role",
+      description:
+        "provider/model, from the listed subagent models when listed; omit for the parent's",
     }),
   ),
-  role: Type.Optional(
-    Type.Union([Type.Literal("eye"), Type.Literal("hand")], {
-      description: "Use a configured eye or hand model and its reasoning level",
-    }),
-  ),
-  eyeIndex: Type.Optional(
-    Type.Integer({
-      minimum: 1,
-      description: "1-based configured eye to use; eye tasks without it consume eyes in pool order",
-    }),
+  thinking: Type.Optional(
+    Type.Union(
+      THINKING_LEVELS.map((level) => Type.Literal(level)),
+      { description: "Reasoning level; omit for the listed or default level" },
+    ),
   ),
   tools: Type.Optional(
     Type.Array(Type.String(), {
       minItems: 1,
       description:
-        "Replaces child defaults: read, grep, find, ls, codemode; hand also gets bash, edit, write. For deferred MCP, include tool_search and each exact mcp__<server>__<tool> name.",
+        "Exact tool allowlist; omit for Pi's default tools. For deferred MCP, include tool_search and each exact mcp__<server>__<tool> name.",
     }),
   ),
 });
@@ -78,11 +70,7 @@ type Brief = Static<typeof Task>;
 
 type Mode = "single" | "parallel" | "chain";
 
-type Assignment = {
-  model?: string;
-  thinking?: ThinkingLevel;
-  source: "eye" | "hand" | "explicit" | "parent";
-};
+type Assignment = { model?: string; thinking?: ThinkingLevel };
 
 type UsageRecord = {
   type: "usage" | "compaction" | "branch_summary";
@@ -115,7 +103,6 @@ type Result = {
   task: string;
   model?: string;
   thinking?: ThinkingLevel;
-  role?: "eye" | "hand";
   exitCode: number;
   stopReason?: string;
   error?: string;
@@ -168,98 +155,51 @@ function invocation(args: string[]) {
   return { command: "pi", args };
 }
 
-function resolveAssignments(
-  briefs: Brief[],
-  ctx: ExtensionContext,
-  configPath: string,
-): Assignment[] {
-  for (const brief of briefs) {
-    if (brief.model && brief.role) {
-      throw new Error(`Task ${brief.name ?? "task"} cannot specify both model and role.`);
-    }
+function modelKey(model: { provider: string; id: string }): string {
+  return `${model.provider}/${model.id}`;
+}
 
-    if (brief.eyeIndex !== undefined && brief.role !== "eye") {
-      throw new Error(`Task ${brief.name ?? "task"} can only use eyeIndex with role "eye".`);
-    }
-  }
-
-  const parentModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
-
-  if (!briefs.some((brief) => brief.role)) {
-    return briefs.map((brief) => ({
-      model: brief.model ?? parentModel,
-      thinking: brief.model ? undefined : ctx.thinkingLevel,
-      source: brief.model ? "explicit" : "parent",
-    }));
-  }
-
-  const { config } = loadConfig(configPath);
-  const missing = missingAssignments(config);
-
-  if (missing.length) {
-    throw new Error(
-      `Subagent model roles are incomplete (${missing.join(", ")} missing). Run /subagent-models.`,
-    );
-  }
-
-  const available = new Map(
-    ctx.modelRegistry.getAvailable().map((model) => [`${model.provider}/${model.id}`, model]),
-  );
-
-  let nextEye = 0;
-  const assignments: Assignment[] = [];
+function resolveAssignments(briefs: Brief[], ctx: ExtensionContext): Assignment[] {
+  const listed = new Map(ctx.scopedModels.map((scoped) => [modelKey(scoped.model), scoped]));
   const errors: string[] = [];
 
-  for (const brief of briefs) {
-    if (!brief.role) {
-      assignments.push({
-        model: brief.model ?? parentModel,
-        thinking: brief.model ? undefined : ctx.thinkingLevel,
-        source: brief.model ? "explicit" : "parent",
-      });
-      continue;
+  const assignments = briefs.map((brief) => {
+    if (!brief.model) {
+      return {
+        model: ctx.model ? modelKey(ctx.model) : undefined,
+        thinking: brief.thinking ?? ctx.thinkingLevel,
+      };
     }
 
-    let eyeIndex = -1;
-
-    if (brief.role === "eye") {
-      eyeIndex = brief.eyeIndex === undefined ? nextEye++ : brief.eyeIndex - 1;
+    if (listed.size && !listed.has(brief.model)) {
+      errors.push(`${brief.name ?? "task"}: ${brief.model} is not in enabledModels`);
     }
 
-    const modelId = brief.role === "hand" ? config.hand : config.eye[eyeIndex];
+    return {
+      model: brief.model,
+      thinking: brief.thinking ?? listed.get(brief.model)?.thinkingLevel,
+    };
+  });
 
-    const thinking =
-      brief.role === "hand" ? config.reasoning.hand : config.reasoning.eye[modelId ?? ""];
+  if (errors.length) {
+    const allowed = [...listed.keys()].join(", ");
 
-    const label = brief.name ?? "task";
-
-    if (!modelId || thinking === null || thinking === undefined) {
-      errors.push(
-        brief.role === "eye"
-          ? `${label}: no configured eye ${eyeIndex + 1}; choose an explicit available model for this overflow seat`
-          : `${label}: hand is not configured`,
-      );
-      continue;
-    }
-
-    const model = available.get(modelId);
-
-    if (!model) {
-      errors.push(`${label}: configured ${brief.role} ${modelId} is unavailable`);
-      continue;
-    }
-
-    if (!getSupportedThinkingLevels(model).includes(thinking)) {
-      errors.push(`${label}: ${modelId} does not support saved reasoning level ${thinking}`);
-      continue;
-    }
-
-    assignments.push({ model: modelId, thinking, source: brief.role });
+    throw new Error(`Cannot route subagents:\n- ${errors.join("\n- ")}\nAllowed: ${allowed}`);
   }
 
-  if (errors.length) throw new Error(`Cannot route subagents:\n- ${errors.join("\n- ")}`);
-
   return assignments;
+}
+
+function guidance(ctx: ExtensionContext): string | undefined {
+  if (!ctx.scopedModels.length) return undefined;
+
+  const models = ctx.scopedModels.map((scoped) => {
+    const thinking = scoped.thinkingLevel ? ` @ ${scoped.thinkingLevel}` : "";
+
+    return `${modelKey(scoped.model)}${thinking}`;
+  });
+
+  return `Subagent models: ${models.join(", ")}. Choose the model, reasoning level, and tools for each subagent task. For independent review, prefer a model family different from your own.`;
 }
 
 function run(
@@ -269,22 +209,9 @@ function run(
   signal: AbortSignal | undefined,
   update?: (result: Result) => void,
 ): Promise<Result> {
-  let tools = READ_TOOLS;
+  const args = ["--mode", "json", "--print", "--no-session", "--exclude-tools", "subagent"];
 
-  if (brief.role === "hand") tools = HAND_TOOLS;
-
-  if (brief.tools) tools = brief.tools;
-
-  const args = [
-    "--mode",
-    "json",
-    "--print",
-    "--no-session",
-    "--exclude-tools",
-    "subagent",
-    "--tools",
-    tools.join(","),
-  ];
+  if (brief.tools) args.push("--tools", brief.tools.join(","));
 
   if (assignment.model) args.push("--model", assignment.model);
 
@@ -296,7 +223,6 @@ function run(
     task: brief.task,
     model: assignment.model,
     thinking: assignment.thinking,
-    role: brief.role,
     exitCode: 1,
     messages: [],
     usageEntries: [],
@@ -515,15 +441,25 @@ function capped(text: string): string {
   return `${bytes.subarray(0, MAX_OUTPUT_BYTES).toString("utf8")}\n[Truncated; full output is in tool details.]`;
 }
 
-export default function subagent(
-  pi: ExtensionAPI,
-  configPath = join(getAgentDir(), "extensions", "subagent-models.json"),
-) {
+export default function subagent(pi: ExtensionAPI) {
+  pi.on("before_agent_start", (event, ctx) => {
+    const sections = event.systemPromptOptions.sections;
+    const text = guidance(ctx);
+
+    if (!text || !event.systemPromptOptions.selectedTools?.includes("subagent")) {
+      delete sections.subagent_models;
+
+      return;
+    }
+
+    sections.subagent_models = text;
+  });
+
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
     description:
-      "Run one self-contained task, independent parallel tasks, or a sequential chain in separate Pi processes. The child has a fresh conversation, not a separate filesystem. Default tools are read, grep, find, ls, codemode; role hand also gets bash, edit, write. Explicit tools replace those defaults; name MCP tools explicitly. Use role eye/hand for configured models and reasoning, or model for an exact override. Implicit eye tasks consume the ordered pool; overflow seats need an explicit model. A chain substitutes {previous} with the previous answer. Parallel writers may share a working tree for orthogonal tasks with disjoint file ownership; serialize shared file or contract changes.",
+      "Run one self-contained task, independent parallel tasks, or a sequential chain in separate Pi processes. Each child has a fresh conversation but shares the filesystem. Omitted model and thinking inherit the parent's; omitted tools give Pi's defaults. A chain substitutes {previous} with the previous answer. Parallel writers need disjoint files.",
     parameters: Params,
     async execute(_id, params, signal, onUpdate, ctx) {
       const modes = [params.task, params.tasks, params.chain].filter(
@@ -537,13 +473,13 @@ export default function subagent(
       if (briefs.length === 0) throw new Error("Provide at least one task.");
 
       if (briefs.length > MAX_TASKS) throw new Error(`Maximum ${MAX_TASKS} tasks per call.`);
-      const assignments = resolveAssignments(briefs, ctx, configPath);
+      const assignments = resolveAssignments(briefs, ctx);
 
       const roster = briefs.map((brief, index) => {
         const assignment = assignments[index];
         const reasoning = assignment.thinking ? ` @ ${assignment.thinking}` : "";
 
-        return `${brief.name ?? index + 1}: ${assignment.model ?? "Pi default"}${reasoning} (${assignment.source})`;
+        return `${brief.name ?? index + 1}: ${assignment.model ?? "Pi default"}${reasoning}`;
       });
 
       onUpdate?.({

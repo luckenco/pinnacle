@@ -8,11 +8,12 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import type {
+  BeforeAgentStartEvent,
   ExtensionAPI,
+  ExtensionContext,
   ExtensionToolContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { type SubagentModels, saveConfig } from "../../subagent-models/config";
 import { addSessionToRange, buildRangeAgg, parseSessionFile } from "../../session-breakdown";
 import subagent from "../index";
 
@@ -22,7 +23,9 @@ let tool: Pick<ToolDefinition, "execute">;
 
 let ctx: ExtensionToolContext;
 
-let configPath: string;
+let models: Model<Api>[];
+
+let beforeAgentStart: (event: BeforeAgentStartEvent, context: ExtensionContext) => void;
 
 let previousScript: string;
 
@@ -30,13 +33,11 @@ beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "pinnacle-subagent-")));
   previousScript = process.argv[1];
   process.argv[1] = fileURLToPath(new URL("./fixtures/child.mjs", import.meta.url));
-  configPath = join(root, "subagent-models.json");
 
-  const models: Model<Api>[] = [
-    { id: "eye-a", reasoning: true },
-    { id: "eye-b", reasoning: false },
-    { id: "hand", reasoning: true },
-    { id: "overflow", reasoning: true },
+  models = [
+    { id: "listed-a", reasoning: true },
+    { id: "listed-b", reasoning: false },
+    { id: "other", reasoning: true },
   ].map((fields) => ({
     api: "openai-completions",
     provider: "test",
@@ -53,18 +54,18 @@ beforeEach(() => {
   ctx = {
     cwd: root,
     model: { provider: "test", id: "parent" },
-    modelRegistry: { getAvailable: () => models },
+    scopedModels: [] as ExtensionToolContext["scopedModels"],
     thinkingLevel: "high",
   } as ExtensionToolContext;
-  // SAFETY: registration only calls registerTool; no other ExtensionAPI method is used.
-  subagent(
-    {
-      registerTool: (definition) => {
-        tool = definition;
-      },
-    } as ExtensionAPI,
-    configPath,
-  );
+  // SAFETY: registration only calls registerTool and on; no other ExtensionAPI method is used.
+  subagent({
+    registerTool: (definition) => {
+      tool = definition;
+    },
+    on: (_event: string, handler: typeof beforeAgentStart) => {
+      beforeAgentStart = handler;
+    },
+  } as ExtensionAPI);
 });
 
 afterEach(() => {
@@ -130,18 +131,7 @@ function childArgs(result: Awaited<ReturnType<ToolDefinition["execute"]>>, index
   return payload.args;
 }
 
-function saveModels(overrides: Partial<SubagentModels> = {}): void {
-  const config: SubagentModels = {
-    eye: ["test/eye-a", "test/eye-b"],
-    hand: "test/hand",
-    reasoning: { eye: { "test/eye-a": "high", "test/eye-b": "off" }, hand: "low" },
-    ...overrides,
-  };
-
-  saveConfig(configPath, null, config);
-}
-
-test("a task inherits the parent's model/thinking and defaults to read-only tools", async () => {
+test("a task inherits the parent's model/thinking and Pi's default tools", async () => {
   const cwd = join(root, "workspace");
   mkdirSync(cwd);
 
@@ -157,7 +147,7 @@ test("a task inherits the parent's model/thinking and defaults to read-only tool
   assert.equal(child.cwd, cwd);
   assert.equal(child.args[child.args.indexOf("--model") + 1], "test/parent");
   assert.equal(child.args[child.args.indexOf("--thinking") + 1], "high");
-  assert.equal(child.args[child.args.indexOf("--tools") + 1], "read,grep,find,ls,codemode");
+  assert.equal(child.args.includes("--tools"), false);
   assert.equal(child.args[child.args.indexOf("--exclude-tools") + 1], "subagent");
   assert.match(text(result), /^inspect ✓\n/);
   assert.ok(Value.Check(resultSchema, result.details));
@@ -287,18 +277,22 @@ test("per-task model, tool permissions, and workspace override the defaults", as
   assert.equal(args.includes("--thinking"), false);
 });
 
-test("configured roles apply eye order, the hand, and saved reasoning", async () => {
-  saveModels();
+test("enabledModels restrict explicit models and supply listed reasoning", async () => {
+  // SAFETY: the fixture only sets the scoped models the tool reads.
+  ctx = {
+    ...ctx,
+    scopedModels: [{ model: models[0], thinkingLevel: "medium" }, { model: models[1] }],
+  } as ExtensionToolContext;
   const updates: string[] = [];
 
   const result = await tool.execute(
-    "roles",
+    "listed",
     {
       tasks: [
-        { name: "hand", task: "inspect", role: "hand" },
-        { name: "first eye", task: "inspect", role: "eye" },
-        { name: "overflow", task: "inspect", model: "test/overflow" },
-        { name: "second eye", task: "inspect", role: "eye" },
+        { name: "listed", task: "inspect", model: "test/listed-a" },
+        { name: "chosen", task: "inspect", model: "test/listed-a", thinking: "low" },
+        { name: "default", task: "inspect", model: "test/listed-b" },
+        { name: "parent", task: "inspect" },
       ],
     },
     undefined,
@@ -311,10 +305,10 @@ test("configured roles apply eye order, the hand, and saved reasoning", async ()
   );
 
   const expected = [
-    ["test/hand", "low"],
-    ["test/eye-a", "high"],
-    ["test/overflow", undefined],
-    ["test/eye-b", "off"],
+    ["test/listed-a", "medium"],
+    ["test/listed-a", "low"],
+    ["test/listed-b", undefined],
+    ["test/parent", "high"],
   ];
 
   for (const [index, [model, thinking]] of expected.entries()) {
@@ -323,112 +317,44 @@ test("configured roles apply eye order, the hand, and saved reasoning", async ()
     assert.equal(args.includes("--thinking"), thinking !== undefined);
 
     if (thinking !== undefined) assert.equal(args[args.indexOf("--thinking") + 1], thinking);
-
-    let tools = "read,grep,find,ls,codemode";
-
-    if (index === 0) tools += ",bash,edit,write";
-    assert.equal(args[args.indexOf("--tools") + 1], tools);
-    assert.equal(args[args.indexOf("--exclude-tools") + 1], "subagent");
   }
 
-  assert.match(updates[0], /first eye: test\/eye-a @ high \(eye\)/);
-  assert.match(updates[0], /overflow: test\/overflow \(explicit\)/);
-});
-
-test("explicit hand tools replace write-capable defaults without adding codemode", async () => {
-  saveModels();
-
-  const result = await tool.execute(
-    "read-only-hand",
-    { task: { task: "inspect", role: "hand", tools: ["read"] } },
-    undefined,
-    undefined,
-    ctx,
-  );
-
-  const args = childArgs(result);
-  assert.equal(args[args.indexOf("--tools") + 1], "read");
-});
-
-test("an eye can be selected by index without changing explicit model behavior", async () => {
-  saveModels();
-
-  const selected = await tool.execute(
-    "selected-eye",
-    { task: { task: "inspect", role: "eye", eyeIndex: 2 } },
-    undefined,
-    undefined,
-    ctx,
-  );
-
-  const selectedArgs = childArgs(selected);
-  assert.equal(selectedArgs[selectedArgs.indexOf("--model") + 1], "test/eye-b");
-  assert.equal(selectedArgs[selectedArgs.indexOf("--thinking") + 1], "off");
+  assert.match(updates[0], /listed: test\/listed-a @ medium/);
 
   await assert.rejects(
     tool.execute(
-      "conflict",
-      { task: { task: "inspect", role: "eye", model: "test/overflow" } },
+      "unlisted",
+      { task: { name: "unlisted", task: "inspect", model: "test/other" } },
       undefined,
       undefined,
       ctx,
     ),
-    /cannot specify both model and role/,
+    /unlisted: test\/other is not in enabledModels\nAllowed: test\/listed-a, test\/listed-b/,
   );
 });
 
-test("role routing rejects incomplete, overflow, unavailable, and unsupported assignments", async () => {
-  await assert.rejects(
-    tool.execute("missing", { task: { task: "inspect", role: "eye" } }, undefined, undefined, ctx),
-    /eye, hand missing/,
-  );
+test("the system prompt lists enabledModels only when subagent is selected", () => {
+  const prompt = (selectedTools: string[], scopedModels: ExtensionContext["scopedModels"]) => {
+    const sections: BeforeAgentStartEvent["systemPromptOptions"]["sections"] = {
+      subagent_models: "stale",
+    };
 
-  saveModels();
-  await assert.rejects(
-    tool.execute(
-      "overflow",
-      {
-        tasks: [
-          { task: "inspect", role: "eye" },
-          { task: "inspect", role: "eye" },
-          { name: "third", task: "inspect", role: "eye" },
-        ],
-      },
-      undefined,
-      undefined,
-      ctx,
-    ),
-    /third: no configured eye 3.*explicit available model/,
-  );
+    // SAFETY: the guidance hook only reads these event and context fields.
+    beforeAgentStart(
+      { systemPromptOptions: { selectedTools, sections } } as BeforeAgentStartEvent,
+      { scopedModels } as ExtensionContext,
+    );
 
-  rmSync(configPath);
-  saveModels({
-    hand: "test/unavailable",
-    reasoning: { eye: { "test/eye-a": "high", "test/eye-b": "off" }, hand: "low" },
-  });
-  await assert.rejects(
-    tool.execute(
-      "unavailable",
-      { task: { task: "inspect", role: "hand" } },
-      undefined,
-      undefined,
-      ctx,
-    ),
-    /configured hand test\/unavailable is unavailable/,
-  );
+    return sections.subagent_models;
+  };
 
-  rmSync(configPath);
-  saveModels({ reasoning: { eye: { "test/eye-a": "high", "test/eye-b": "high" }, hand: "low" } });
-  await assert.rejects(
-    tool.execute(
-      "unsupported",
-      { task: { task: "inspect", role: "eye", eyeIndex: 2 } },
-      undefined,
-      undefined,
-      ctx,
-    ),
-    /does not support saved reasoning level high/,
+  const listed = [{ model: models[0], thinkingLevel: "high" as const }, { model: models[1] }];
+  assert.match(
+    prompt(["subagent"], listed),
+    /^Subagent models: test\/listed-a @ high, test\/listed-b\./,
   );
+  assert.equal(prompt(["read"], listed), undefined);
+  assert.equal(prompt(["subagent"], []), undefined);
 });
 
 test("parallel returns successful results and failed child diagnostics separately", async () => {
