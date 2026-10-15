@@ -190,7 +190,7 @@ test("OpenAI OAuth full and simple streams request priority with fallback pricin
       };
 
       const normal = await stream().result();
-      assert.equal(normal.stopReason, "stop", normal.errorMessage);
+      assert.equal(normal.stopReason, "stop", normal.errorMessage ?? "");
       const ordinary = JSON.parse(payloads.at(-1)!);
       assert.equal(ordinary.service_tier, undefined);
       assert.equal(ordinary.reasoning.effort, "high");
@@ -198,7 +198,7 @@ test("OpenAI OAuth full and simple streams request priority with fallback pricin
       await command.handler("on", ctx);
       assert.equal(status, "⚡ Fast");
       const fast = await stream().result();
-      assert.equal(fast.stopReason, "stop", fast.errorMessage);
+      assert.equal(fast.stopReason, "stop", fast.errorMessage ?? "");
       assert.deepEqual(JSON.parse(payloads.at(-1)!), { ...ordinary, service_tier: "priority" });
       assert.equal(requestHeaders.get("authorization"), "Bearer chatgpt-access-token");
       // OpenAI Responses trusts a reported tier and falls back to the request only when omitted.
@@ -238,7 +238,7 @@ test("OpenAI API-key and custom endpoint requests remain unchanged", async () =>
       if (simple) expectedTier = undefined;
 
       const result = await stream().result();
-      assert.equal(result.stopReason, "stop", result.errorMessage);
+      assert.equal(result.stopReason, "stop", result.errorMessage ?? "");
       assert.equal(JSON.parse(payloads.at(-1)!).service_tier, expectedTier);
     }
   }
@@ -266,7 +266,7 @@ test("registered full streams preserve options and priority fallback pricing", a
     };
 
     const normal = await registry.stream(model(id), context, options).result();
-    assert.equal(normal.stopReason, "stop", normal.errorMessage);
+    assert.equal(normal.stopReason, "stop", normal.errorMessage ?? "");
     const ordinary = JSON.parse(payloads.at(-1)!);
     assert.equal(ordinary.service_tier, undefined);
     assert.equal(ordinary.reasoning.effort, "high");
@@ -274,7 +274,7 @@ test("registered full streams preserve options and priority fallback pricing", a
 
     await command.handler("on", ctx);
     const fast = await registry.stream(model(id), context, options).result();
-    assert.equal(fast.stopReason, "stop", fast.errorMessage);
+    assert.equal(fast.stopReason, "stop", fast.errorMessage ?? "");
     assert.deepEqual(JSON.parse(payloads.at(-1)!), { ...ordinary, service_tier: "priority" });
     assert.equal(fast.usage.cost.total, normal.usage.cost.total * (id === "gpt-5.5" ? 2.5 : 2));
   }
@@ -291,13 +291,13 @@ test("simple streams preserve reasoning and tools while retaining priority prici
     await command.handler("off", ctx);
     const options = { ...request, reasoning, toolChoice: "none" as const };
     const normal = await registry.streamSimple(model(), context, options).result();
-    assert.equal(normal.stopReason, "stop", normal.errorMessage);
+    assert.equal(normal.stopReason, "stop", normal.errorMessage ?? "");
     const ordinary = JSON.parse(payloads.at(-1)!);
     assert.equal(ordinary.tool_choice, "none");
 
     await command.handler("on", ctx);
     const fast = await registry.streamSimple(model(), context, options).result();
-    assert.equal(fast.stopReason, "stop", fast.errorMessage);
+    assert.equal(fast.stopReason, "stop", fast.errorMessage ?? "");
     assert.deepEqual(JSON.parse(payloads.at(-1)!), { ...ordinary, service_tier: "priority" });
     assert.equal(fast.usage.cost.total, normal.usage.cost.total * 2);
   }
@@ -398,10 +398,10 @@ test("omitted response tiers retain priority pricing and non-reasoning models st
   const noReasoning = { ...model(), reasoning: false };
   const options = { ...request, reasoning: "high" as const };
   const normal = await registry.streamSimple(noReasoning, context, options).result();
-  assert.equal(normal.stopReason, "stop", normal.errorMessage);
+  assert.equal(normal.stopReason, "stop", normal.errorMessage ?? "");
   await command.handler("on", ctx);
   const fast = await registry.streamSimple(noReasoning, context, options).result();
-  assert.equal(fast.stopReason, "stop", fast.errorMessage);
+  assert.equal(fast.stopReason, "stop", fast.errorMessage ?? "");
   assert.equal(JSON.parse(payloads.at(-1)!).reasoning, undefined);
   assert.equal(fast.usage.cost.total, normal.usage.cost.total * 2);
 });

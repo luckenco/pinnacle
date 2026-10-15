@@ -28,14 +28,14 @@
     "test": "bun test"
   },
   "devDependencies": {
-    "@earendil-works/pi-agent-core": "^0.99.2",
-    "@earendil-works/pi-ai": "^0.99.2",
-    "@earendil-works/pi-coding-agent": "^0.99.2",
-    "@earendil-works/pi-tui": "^0.99.2",
-    "@oxlint/plugins": "1.86.0",
+    "@earendil-works/pi-agent-core": "^1.2.0",
+    "@earendil-works/pi-ai": "^1.2.0",
+    "@earendil-works/pi-coding-agent": "^1.2.0",
+    "@earendil-works/pi-tui": "^1.2.0",
+    "@oxlint/plugins": "1.88.0",
     "@types/node": "latest",
-    "oxfmt": "0.71.0",
-    "oxlint": "1.86.0",
+    "oxfmt": "0.73.0",
+    "oxlint": "1.88.0",
     "typescript": "latest"
   },
   "peerDependencies": {
@@ -48,7 +48,7 @@
   "engines": {
     "bun": ">=1.3.0"
   },
-  "packageManager": "bun@1.3.9",
+  "packageManager": "bun@1.4.2",
   "pi": {
     "extensions": [
       "./extensions"
