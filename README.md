@@ -17,8 +17,6 @@ This loads Pinnacle for this run. Your existing Pi configuration still applies.
 - [`git-interceptor`](extensions/git-interceptor.ts): Prevents Git editor hangs and blocks agents from bypassing hooks with `--no-verify`.
 - [`notify`](extensions/notify.ts): Sends an OSC 777 desktop notification when an agent finishes and waits for input.
 - [`session-breakdown`](extensions/session-breakdown.ts): Adds `/session-breakdown` for interactive 7/30/90-day and 1-year (365-day) session-start counts and request-dated message, token, model, and recorded-equivalent cost summaries, including compaction, branch-summary, standalone, and embedded subagent usage.
-- [`skill-toggle`](extensions/skill-toggle/): Adds `/toggle-skills` to choose, per repository, which loaded skills are visible to the model while keeping `/skill:<name>` commands available.
-- [`skills`](extensions/skills.ts): Adds `/skills` to search loaded skills by name or description and prepare a `/skill:<name>` invocation in the editor.
 - [`subagent`](extensions/subagent/): Dispatches self-contained single, parallel, or chained tasks in separate Pi processes.
 - [`subagent-models`](extensions/subagent-models/): Adds `/subagent-models` and resolves subagent eye and hand roles with explicit reasoning levels.
 - [`uv`](extensions/uv.ts): Replaces the Bash tool with one that redirects Python, pip, and Poetry workflows through `uv`.
