@@ -26,11 +26,9 @@ This loads Pinnacle for this run. Your existing Pi configuration still applies.
 
 ## Skills
 
-- [`architect`](skills/architect/SKILL.md): Designs types, signatures, and module boundaries through competing sketches before implementation.
 - [`arena`](skills/arena/SKILL.md): Runs multiple independent attempts at one task, picks a base, grafts the strongest ideas, and verifies the result.
 - [`blast-radius`](skills/blast-radius/SKILL.md): Traces what a change could break outside its diff and proves the key safety claim by running real code.
 - [`create-verification-skill`](skills/create-verification-skill/SKILL.md): Generates a project-local skill that verifies an application through realistic user-facing behavior.
-- [`github`](skills/github/SKILL.md): Uses the `gh` CLI for GitHub issues, pull requests, workflow runs, and API queries.
 - [`hillclimb`](skills/hillclimb/SKILL.md): Improves one measured metric through isolated hypotheses, keep-or-revert experiments, and regression gates.
 - [`how`](skills/how/SKILL.md): Explores a codebase and explains subsystem architecture, runtime flow, ownership, and layering.
 - [`interrogate`](skills/interrogate/SKILL.md): Sends the same code review to multiple models and synthesizes an adversarial verdict.
@@ -62,7 +60,6 @@ StackScout can optionally provide caller/dependency evidence before dispatch and
 ## Scripts and supporting assets
 
 - [`intercepted-commands/`](intercepted-commands/): Provides the `pip`, `pip3`, `poetry`, `python`, and `python3` shims used by the `uv` extension.
-- [`skills/principles/`](skills/principles/): Holds shared workflow principles referenced by skills rather than exposed as separate skills.
 - [`skills/show-me-your-work/scripts/log.sh`](skills/show-me-your-work/scripts/log.sh): Appends sanitized rows to a decision log with timestamps and spreadsheet-formula protection.
 - [`doom-peacock`](themes/doom-peacock.json), [`gruvbox-dark-hard`](themes/gruvbox-dark-hard.json), and [`gruvbox-dark`](themes/gruvbox-dark.json): Bundled Pi themes.
 
