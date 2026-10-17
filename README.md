@@ -17,7 +17,7 @@ This loads Pinnacle for this run. Your existing Pi configuration still applies.
 - [`git-interceptor`](extensions/git-interceptor.ts): Prevents Git editor hangs and blocks agents from bypassing hooks with `--no-verify`.
 - [`notify`](extensions/notify.ts): Sends an OSC 777 desktop notification when an agent finishes and waits for input.
 - [`session-breakdown`](extensions/session-breakdown.ts): Adds `/session-breakdown` for interactive 7/30/90-day and 1-year (365-day) session-start counts and request-dated message, token, model, and recorded-equivalent cost summaries, including compaction, branch-summary, standalone, and embedded subagent usage.
-- [`subagent`](extensions/subagent/): Dispatches self-contained single, parallel, or chained tasks in separate Pi processes.
+- [`subagent`](extensions/subagent/): Dispatches self-contained single, parallel, or chained tasks in separate Pi processes, with a persistent `/subagents [on|off]` toggle.
 - [`uv`](extensions/uv.ts): Replaces the Bash tool with one that redirects Python, pip, and Poetry workflows through `uv`.
 - [`worker-configuration-guard`](extensions/worker-configuration-guard.ts): Blocks manual changes to generated `worker-configuration.d.ts` files and directs agents to `wrangler types`.
 
@@ -40,6 +40,8 @@ This loads Pinnacle for this run. Your existing Pi configuration still applies.
 - [`/implement <task>`](prompts/implement.md): Implements a bounded task with behavior verification, focused review, and an evidence-based handoff.
 
 ## Subagent models
+
+Use `/subagents` to toggle delegation, `/subagents off` to disable it, or `/subagents on` to enable it. Enabled by default; the preference is saved across restarts. When disabled, the model gets no subagent tool or subagent model guidance, leaving Pi's normal tools and prompt unchanged. Other installed extensions remain active.
 
 Subagents choose from Pi's `enabledModels`, the same list Ctrl+P cycles through. The `subagent` tool lists those models in the system prompt and rejects others. A thinking suffix in the list, such as `provider/model:high`, applies unless a task sets `thinking`. Without `enabledModels`, any model is allowed. Tasks that omit `model` and `thinking` inherit the parent's; tasks that omit `tools` get Pi's default tools. See the [subagent tool guide](extensions/subagent/README.md).
 

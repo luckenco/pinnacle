@@ -1,7 +1,8 @@
 // Adapted from Pi's subagent example (v0.87.1). See README.md for source and license.
 import { type ChildProcessByStdio, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { basename } from "node:path";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import type { Readable } from "node:stream";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Message, Usage } from "@earendil-works/pi-ai";
@@ -11,6 +12,7 @@ import type {
   ExtensionContext,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
@@ -21,6 +23,34 @@ const MAX_TASKS = 8;
 const MAX_CONCURRENT = 4;
 
 const MAX_OUTPUT_BYTES = 50 * 1024;
+
+const EnabledSchema = Type.Object({ enabled: Type.Boolean() });
+
+function loadEnabled(agentDir: string): boolean {
+  try {
+    const value: unknown = JSON.parse(
+      readFileSync(join(agentDir, "extensions", "subagent.json"), "utf8"),
+    );
+
+    return Value.Check(EnabledSchema, value) ? value.enabled : true;
+  } catch {
+    return true;
+  }
+}
+
+function saveEnabled(agentDir: string, enabled: boolean): void {
+  const directory = join(agentDir, "extensions");
+  const path = join(directory, "subagent.json");
+  const temp = `${path}.${randomUUID()}.tmp`;
+  mkdirSync(directory, { recursive: true });
+
+  try {
+    writeFileSync(temp, `${JSON.stringify({ enabled }, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+    renameSync(temp, path);
+  } finally {
+    rmSync(temp, { force: true });
+  }
+}
 
 const Task = Type.Object({
   task: Type.String({
@@ -441,10 +471,59 @@ function capped(text: string): string {
   return `${bytes.subarray(0, MAX_OUTPUT_BYTES).toString("utf8")}\n[Truncated; full output is in tool details.]`;
 }
 
-export default function subagent(pi: ExtensionAPI) {
+export default function subagent(pi: ExtensionAPI, agentDir = getAgentDir()) {
+  let enabled = loadEnabled(agentDir);
+
+  const deactivate = () => {
+    const tools = pi.getActiveTools();
+
+    if (tools.includes("subagent")) {
+      pi.setActiveTools(tools.filter((name) => name !== "subagent"));
+    }
+  };
+
+  pi.on("session_start", () => {
+    if (!enabled) deactivate();
+  });
+
+  pi.registerCommand("subagents", {
+    description: "Toggle subagents, or set on/off (saved across restarts)",
+    handler: async (args, ctx) => {
+      const action = args.trim().toLowerCase();
+
+      if (action !== "" && action !== "on" && action !== "off") {
+        ctx.ui.notify("Usage: /subagents [on|off]", "warning");
+
+        return;
+      }
+
+      const next = action === "on" || (action === "" && !enabled);
+
+      try {
+        saveEnabled(agentDir, next);
+      } catch (error) {
+        ctx.ui.notify(`Could not save subagent setting: ${String(error)}`, "error");
+
+        return;
+      }
+
+      enabled = next;
+
+      if (enabled) {
+        const tools = pi.getActiveTools();
+
+        if (!tools.includes("subagent")) pi.setActiveTools([...tools, "subagent"]);
+      } else {
+        deactivate();
+      }
+
+      ctx.ui.notify(`Subagents ${enabled ? "enabled" : "disabled"}`, "info");
+    },
+  });
+
   pi.on("before_agent_start", (event, ctx) => {
     const sections = event.systemPromptOptions.sections;
-    const text = guidance(ctx);
+    const text = enabled ? guidance(ctx) : undefined;
 
     if (!text || !event.systemPromptOptions.selectedTools?.includes("subagent")) {
       delete sections.subagent_models;
@@ -458,10 +537,13 @@ export default function subagent(pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
+    defaultActive: enabled,
     description:
       "Run one self-contained task, independent parallel tasks, or a sequential chain in separate Pi processes. Each child has a fresh conversation but shares the filesystem. Omitted model and thinking inherit the parent's; omitted tools give Pi's defaults. A chain substitutes {previous} with the previous answer. Parallel writers need disjoint files.",
     parameters: Params,
     async execute(_id, params, signal, onUpdate, ctx) {
+      if (!enabled) throw new Error("Subagents are disabled. Enable them with /subagents on.");
+
       const modes = [params.task, params.tasks, params.chain].filter(
         (value) => value !== undefined,
       );

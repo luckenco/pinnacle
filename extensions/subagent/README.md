@@ -4,6 +4,18 @@ Adapted from [Pi's subagent example](https://github.com/earendil-works/pi/tree/f
 
 Pinnacle's package loads the `subagent` tool when installed. To test this checkout without updating the package, use `pi -e ~/Code/pinnacle/extensions/subagent/index.ts`. Do not load both copies in one session.
 
+## Toggle
+
+- `/subagents` toggles delegation.
+- `/subagents off` disables it.
+- `/subagents on` enables it.
+
+Subagents are enabled by default. The preference is saved atomically in `~/.pi/agent/extensions/subagent.json` (under `PI_CODING_AGENT_DIR` when overridden), before the live setting changes. New Pi processes and `/reload` read the saved preference; already-running processes keep their own setting.
+
+When disabled, this extension removes only `subagent` from the active tools, adds no subagent model guidance to the system prompt, and rejects stale dispatch attempts before launching a child. Pi otherwise keeps its normal tools and prompt; other extensions, skills, and existing conversation history are not removed. Disabling does not cancel children already running. Startup still respects explicit tool selections and exclusions, including the child processes' `--exclude-tools subagent`; `/subagents on` explicitly activates the tool when permitted by those filters.
+
+## Task briefs
+
 The child receives a fresh conversation, project instructions, and the **task brief**, but not the parent's conversation. Give it the goal, paths, criteria, and any references it must read.
 
 Each task can set `name`, `cwd`, `model`, `thinking`, and `tools`:

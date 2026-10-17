@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
@@ -10,8 +10,10 @@ import { Value } from "typebox/value";
 import type {
   BeforeAgentStartEvent,
   ExtensionAPI,
+  ExtensionCommandContext,
   ExtensionContext,
   ExtensionToolContext,
+  RegisteredCommand,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { addSessionToRange, buildRangeAgg, parseSessionFile } from "../../session-breakdown";
@@ -26,6 +28,43 @@ let ctx: ExtensionToolContext;
 let models: Model<Api>[];
 
 let beforeAgentStart: (event: BeforeAgentStartEvent, context: ExtensionContext) => void;
+
+let sessionStart: () => void;
+
+let command: Omit<RegisteredCommand, "name" | "sourceInfo">;
+
+let activeTools: string[];
+
+let notifications: { message: string; type?: string }[];
+
+let commandContext: ExtensionCommandContext;
+
+function register() {
+  // SAFETY: the fixture provides only the API methods this extension uses.
+  subagent(
+    {
+      registerTool: (definition) => {
+        tool = definition;
+      },
+      registerCommand: (name, definition) => {
+        assert.equal(name, "subagents");
+        command = definition;
+      },
+      getActiveTools: () => [...activeTools],
+      setActiveTools: (names) => {
+        activeTools = names;
+      },
+      on: (event: string, handler: typeof beforeAgentStart & typeof sessionStart) => {
+        if (event === "before_agent_start") {
+          beforeAgentStart = handler;
+        } else if (event === "session_start") {
+          sessionStart = handler;
+        }
+      },
+    } as ExtensionAPI,
+    root,
+  );
+}
 
 let previousScript: string;
 
@@ -57,15 +96,17 @@ beforeEach(() => {
     scopedModels: [] as ExtensionToolContext["scopedModels"],
     thinkingLevel: "high",
   } as ExtensionToolContext;
-  // SAFETY: registration only calls registerTool and on; no other ExtensionAPI method is used.
-  subagent({
-    registerTool: (definition) => {
-      tool = definition;
+  activeTools = ["read", "bash", "subagent", "another-extension"];
+  notifications = [];
+  // SAFETY: the command only uses ui.notify on its context.
+  commandContext = {
+    ui: {
+      notify: (message: string, type?: string) => {
+        notifications.push({ message, type });
+      },
     },
-    on: (_event: string, handler: typeof beforeAgentStart) => {
-      beforeAgentStart = handler;
-    },
-  } as ExtensionAPI);
+  } as ExtensionCommandContext;
+  register();
 });
 
 afterEach(() => {
@@ -355,6 +396,92 @@ test("the system prompt lists enabledModels only when subagent is selected", () 
   );
   assert.equal(prompt(["read"], listed), undefined);
   assert.equal(prompt(["subagent"], []), undefined);
+});
+
+test("off removes only subagent, strips guidance, and blocks stale dispatch", async () => {
+  await command.handler("off", commandContext);
+  assert.deepEqual(activeTools, ["read", "bash", "another-extension"]);
+
+  const sections: BeforeAgentStartEvent["systemPromptOptions"]["sections"] = {
+    subagent_models: "stale",
+    unchanged: "keep",
+  };
+
+  beforeAgentStart(
+    // SAFETY: the hook only uses systemPromptOptions and scopedModels.
+    { systemPromptOptions: { selectedTools: ["subagent"], sections } } as BeforeAgentStartEvent,
+    { ...ctx, scopedModels: [{ model: models[0] }] },
+  );
+  assert.deepEqual(sections, { unchanged: "keep" });
+  await assert.rejects(
+    tool.execute("disabled", { task: { task: "inspect" } }, undefined, undefined, ctx),
+    /Subagents are disabled/,
+  );
+
+  await command.handler("", commandContext);
+  assert.deepEqual(activeTools, ["read", "bash", "another-extension", "subagent"]);
+
+  const result = await tool.execute(
+    "reenabled",
+    { task: { task: "inspect" } },
+    undefined,
+    undefined,
+    ctx,
+  );
+
+  assert.match(text(result), /^inspect ✓/);
+});
+
+test("the saved preference survives reload and session changes without overriding tool selection", async () => {
+  await command.handler("off", commandContext);
+  assert.deepEqual(JSON.parse(readFileSync(join(root, "extensions", "subagent.json"), "utf8")), {
+    enabled: false,
+  });
+  register();
+  activeTools = ["read", "subagent"];
+  sessionStart();
+  assert.deepEqual(activeTools, ["read"]);
+  await assert.rejects(
+    tool.execute("reloaded", { task: { task: "inspect" } }, undefined, undefined, ctx),
+    /Subagents are disabled/,
+  );
+
+  await command.handler("on", commandContext);
+  register();
+  activeTools = ["read"];
+  sessionStart();
+  assert.deepEqual(activeTools, ["read"]);
+
+  const result = await tool.execute(
+    "saved-on",
+    { task: { task: "inspect" } },
+    undefined,
+    undefined,
+    ctx,
+  );
+
+  assert.match(text(result), /^inspect ✓/);
+});
+
+test("invalid arguments and failed saves leave the live preference unchanged", async () => {
+  await command.handler("invalid", commandContext);
+  assert.equal(notifications.at(-1)?.type, "warning");
+  assert.equal(activeTools.includes("subagent"), true);
+
+  writeFileSync(join(root, "extensions"), "not a directory");
+  await command.handler("off", commandContext);
+  assert.equal(notifications.at(-1)?.type, "error");
+  assert.equal(activeTools.includes("subagent"), true);
+
+  const result = await tool.execute(
+    "unsaved",
+    { task: { task: "inspect" } },
+    undefined,
+    undefined,
+    ctx,
+  );
+
+  assert.match(text(result), /^inspect ✓/);
 });
 
 test("parallel returns successful results and failed child diagnostics separately", async () => {
