@@ -28,14 +28,14 @@
     "test": "bun test"
   },
   "devDependencies": {
-    "@earendil-works/pi-agent-core": "^1.5.0",
-    "@earendil-works/pi-ai": "^1.5.0",
-    "@earendil-works/pi-coding-agent": "^1.5.0",
-    "@earendil-works/pi-tui": "^1.5.0",
-    "@oxlint/plugins": "1.90.0",
+    "@earendil-works/pi-agent-core": "^1.5.2",
+    "@earendil-works/pi-ai": "^1.5.2",
+    "@earendil-works/pi-coding-agent": "^1.5.2",
+    "@earendil-works/pi-tui": "^1.5.2",
+    "@oxlint/plugins": "1.93.0",
     "@types/node": "latest",
-    "oxfmt": "0.75.0",
-    "oxlint": "1.90.0",
+    "oxfmt": "0.78.0",
+    "oxlint": "1.93.0",
     "typescript": "latest"
   },
   "peerDependencies": {

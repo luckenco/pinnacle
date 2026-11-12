@@ -64,7 +64,7 @@ Cost is recorded-equivalent usage, not an invoice. Subagent messages and non-mes
 - [`tools/oxlint/anti-slop/`](tools/oxlint/anti-slop/): Vendors the anti-slop Oxlint rules, including the optional Effect rules and their upstream license and provenance.
 - [`.oxlintrc.json`](.oxlintrc.json): Enables the generic anti-slop rules and ignores installed agent assets and vendored rules.
 - [`.oxfmtrc.json`](.oxfmtrc.json): Configures Oxfmt and excludes vendored rules, agent assets, and Markdown documentation.
-- `bun run lint` runs Oxlint; `bun run format` formats with Oxfmt; `bun run check` checks Oxfmt formatting, Oxlint, and TypeScript.
+- `bun run lint` runs Oxlint 1.93.0; `bun run format` formats with Oxfmt 0.78.0; `bun run check` checks Oxfmt formatting, Oxlint, and TypeScript.
 
 ## Origins
 
